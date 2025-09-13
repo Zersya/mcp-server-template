@@ -4,4 +4,5 @@ apify-client>=1.6.0
 requests>=2.31.0
 replicate>=0.25.0
 pillow>=10.0.0
+boto3>=1.34.0
 

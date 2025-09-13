@@ -57,6 +57,9 @@ Search and download free-to-use images from Unsplash's extensive collection.
 ### Image Editing (Replicate AI)
 Edit images using AI models via Replicate's `google/nano-banana` model.
 
+### Cloud Storage (Cloudflare R2)
+Automatically upload all images to Cloudflare R2 storage with public URLs and time-limited access.
+
 ## Environment Variables
 
 **Required:**
@@ -64,8 +67,15 @@ Edit images using AI models via Replicate's `google/nano-banana` model.
 - `UNSPLASH_ACCESS_KEY`: Unsplash API access key for image fetching
 - `REPLICATE_API_TOKEN`: Replicate API token for image editing
 
-**Optional:**
-- `POKE_API_KEY`: API key for notifications
+**Cloudflare R2 Storage (Optional but Recommended):**
+- `CLOUDFLARE_R2_ACCOUNT_ID`: Cloudflare account ID
+- `CLOUDFLARE_R2_ACCESS_KEY_ID`: R2 access key
+- `CLOUDFLARE_R2_SECRET_ACCESS_KEY`: R2 secret key
+- `CLOUDFLARE_R2_BUCKET_NAME`: Target bucket name
+- `CLOUDFLARE_R2_PUBLIC_DOMAIN`: Custom domain for public URLs (optional)
+
+**Notifications:**
+- `POKE_API_KEY`: API key for SMS notifications (includes image URLs when R2 is configured)
 - `NOTIFY_URL`: Webhook URL for notifications (defaults to `https://poke.com/api/v1/inbound-sms/webhook`)
 
 ## MCP Tools
@@ -82,9 +92,30 @@ Edit images using AI models via Replicate's `google/nano-banana` model.
 - **Instagram Scraping**: Collect posts, profiles, and hashtag content
 - **Image Search**: Find free-to-use images with proper attribution
 - **AI Image Editing**: Modify images using natural language prompts
-- **Local Storage**: Downloaded images saved to `./images/` directory
-- **Notifications**: Status updates sent after each operation
+- **Cloud Storage**: Automatic upload to Cloudflare R2 with organized folders (`/fetched/`, `/edited/`)
+- **Public URLs**: Time-limited access URLs (24 hours) for easy sharing
+- **SMS Notifications**: Status updates with image URLs sent after each operation
+- **Local Backup**: Downloaded images saved to `./images/` directory as backup
 - **Integration**: Tools work together - edit Instagram images or Unsplash photos
+- **Error Handling**: Graceful degradation when cloud storage is unavailable
+
+## Cloud Storage Structure
+
+When Cloudflare R2 is configured, images are automatically organized in folders:
+- `/fetched/` - Images downloaded from Unsplash
+- `/edited/` - AI-edited images from Replicate
+
+Each image gets:
+- **R2 URL**: `s3://bucket-name/folder/filename.jpg`
+- **Public URL**: Time-limited access URL (24 hours)
+- **Expiration**: Automatic cleanup after expiration period
+
+## SMS Notifications
+
+When both R2 storage and SMS notifications are configured:
+- Receive instant notifications with public image URLs
+- URLs are included in SMS messages with expiration info
+- Format: `"Operation completed - Images: [URL] - expires in 24h"`
 
 Setup dependencies:
 ```bash
