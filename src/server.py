@@ -247,12 +247,34 @@ def instagram_scrape(
             }
 
         run = client.actor("apify/instagram-scraper").call(run_input=run_input)
+
+        # Check if run was successful
+        if not run:
+            raise RuntimeError("Apify actor run failed - no response received")
+
+        # Debug: log the run response structure
+        print(f"Apify run response: {run}")
+
         dataset_id = run.get("defaultDatasetId")
+        if not dataset_id:
+            # Try alternative key names
+            dataset_id = run.get("datasetId") or run.get("dataset_id")
+            if not dataset_id:
+                raise RuntimeError(f"Apify actor run failed - no dataset ID returned. Run response: {run}")
+
         items: List[Dict[str, Any]] = []
-        if dataset_id:
+        try:
             for item in client.dataset(dataset_id).iterate_items():
                 items.append(item)
+        except Exception as dataset_error:
+            raise RuntimeError(f"Failed to retrieve dataset items: {dataset_error}")
+
         status = run.get("status", "UNKNOWN")
+
+        # Check if the run failed
+        if status in ["FAILED", "ABORTED", "TIMED-OUT"]:
+            error_message = run.get("statusMessage", "Unknown error")
+            raise RuntimeError(f"Apify actor run {status}: {error_message}")
 
         notify = notify_status(f"Instagram scraping {status.lower()}: {len(items)} items")
 
@@ -263,6 +285,13 @@ def instagram_scrape(
             "items_count": len(items),
             "items": items,
             "notification": notify,
+            "run_info": {
+                "id": run.get("id"),
+                "status": status,
+                "started_at": run.get("startedAt"),
+                "finished_at": run.get("finishedAt"),
+                "usage": run.get("usage", {})
+            }
         }
     except Exception as e:
         notify_status(f"Instagram scraping failed: {e}")
