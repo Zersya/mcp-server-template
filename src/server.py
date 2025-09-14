@@ -995,9 +995,202 @@ def image_fetch_unsplash(
 
 @mcp.tool(
     description=(
+        "Generate Instagram post images using Ideogram AI (ideogram-ai/ideogram-v3-turbo). "
+        "Creates high-quality images optimized for social media with text overlays and branding. "
+        "Supports various aspect ratios and styles perfect for Instagram posts and carousels. "
+        "Returns generated image URL and saves locally. Sends notification after completion."
+    )
+)
+def image_generate_ideogram(
+    prompt: str,
+    style_type: str = "AUTO",
+    aspect_ratio: str = "1:1",
+    magic_prompt_option: str = "AUTO",
+    negative_prompt: Optional[str] = None,
+    save_locally: bool = True,
+) -> Dict[str, Any]:
+    """Generate Instagram post images using Ideogram AI."""
+    try:
+        if not replicate:
+            raise RuntimeError("replicate library is not installed")
+
+        api_token = _env("REPLICATE_API_TOKEN")
+        if not api_token:
+            raise RuntimeError("REPLICATE_API_TOKEN not configured")
+
+        # Check existing images first
+        existing = _check_existing_images()
+
+        # Validate input parameters
+        valid_styles = ["AUTO", "REALISTIC", "ANIME", "RENDER_3D", "CINEMATIC"]
+        if style_type not in valid_styles:
+            raise ValueError(f"style_type must be one of: {', '.join(valid_styles)}")
+
+        valid_ratios = ["1:1", "16:9", "9:16", "4:3", "3:4"]
+        if aspect_ratio not in valid_ratios:
+            raise ValueError(f"aspect_ratio must be one of: {', '.join(valid_ratios)}")
+
+        valid_magic_prompts = ["AUTO", "ON", "OFF"]
+        if magic_prompt_option not in valid_magic_prompts:
+            raise ValueError(f"magic_prompt_option must be one of: {', '.join(valid_magic_prompts)}")
+
+        # Prepare model input
+        model_input = {
+            "prompt": prompt,
+            "style_type": style_type,
+            "aspect_ratio": aspect_ratio,
+            "magic_prompt_option": magic_prompt_option
+        }
+
+        if negative_prompt:
+            model_input["negative_prompt"] = negative_prompt
+
+        # Run the model
+        output = replicate.run(
+            "ideogram-ai/ideogram-v3-turbo",
+            input=model_input
+        )
+
+        # Process output
+        result_info = {
+            "model": "ideogram-ai/ideogram-v3-turbo",
+            "prompt": prompt,
+            "style_type": style_type,
+            "aspect_ratio": aspect_ratio,
+            "magic_prompt_option": magic_prompt_option,
+            "negative_prompt": negative_prompt,
+            "existing_images": existing
+        }
+
+        if output:
+            if hasattr(output, 'read'):
+                # FileOutput object
+                if save_locally:
+                    images_dir = _ensure_images_dir()
+                    filename = f"ideogram_{uuid.uuid4().hex[:8]}.png"
+                    local_path = images_dir / filename
+
+                    with open(local_path, 'wb') as f:
+                        f.write(output.read())
+
+                    result_info.update({
+                        "success": True,
+                        "local_path": str(local_path),
+                        "size_bytes": local_path.stat().st_size,
+                        "output_url": None
+                    })
+
+                    # Upload to R2 storage
+                    r2_result = _upload_to_r2(str(local_path), "generated", filename)
+                    if r2_result["success"]:
+                        result_info.update({
+                            "r2_url": r2_result["r2_url"],
+                            "public_url": r2_result["public_url"],
+                            "expires_at": r2_result["expires_at"],
+                            "expires_in_hours": r2_result["expires_in_hours"]
+                        })
+                    else:
+                        result_info["r2_error"] = r2_result["error"]
+                else:
+                    result_info.update({
+                        "success": True,
+                        "output_data": output.read(),
+                        "local_path": None
+                    })
+            elif isinstance(output, str) and output.startswith("http"):
+                # URL output
+                result_info.update({
+                    "success": True,
+                    "output_url": output,
+                    "local_path": None
+                })
+
+                if save_locally:
+                    filename = f"ideogram_{uuid.uuid4().hex[:8]}.png"
+                    download_result = _download_image(output, filename)
+                    if download_result["success"]:
+                        result_info.update({
+                            "local_path": download_result["local_path"],
+                            "size_bytes": download_result["size_bytes"]
+                        })
+
+                        # Upload to R2 storage
+                        r2_result = _upload_to_r2(download_result["local_path"], "generated", filename)
+                        if r2_result["success"]:
+                            result_info.update({
+                                "r2_url": r2_result["r2_url"],
+                                "public_url": r2_result["public_url"],
+                                "expires_at": r2_result["expires_at"],
+                                "expires_in_hours": r2_result["expires_in_hours"]
+                            })
+                        else:
+                            result_info["r2_error"] = r2_result["error"]
+            elif isinstance(output, list) and len(output) > 0:
+                # List of URLs ( Ideogram returns multiple images)
+                primary_url = output[0]
+                result_info.update({
+                    "success": True,
+                    "output_url": primary_url,
+                    "all_urls": output,
+                    "local_path": None
+                })
+
+                if save_locally:
+                    filename = f"ideogram_{uuid.uuid4().hex[:8]}.png"
+                    download_result = _download_image(primary_url, filename)
+                    if download_result["success"]:
+                        result_info.update({
+                            "local_path": download_result["local_path"],
+                            "size_bytes": download_result["size_bytes"]
+                        })
+
+                        # Upload to R2 storage
+                        r2_result = _upload_to_r2(download_result["local_path"], "generated", filename)
+                        if r2_result["success"]:
+                            result_info.update({
+                                "r2_url": r2_result["r2_url"],
+                                "public_url": r2_result["public_url"],
+                                "expires_at": r2_result["expires_at"],
+                                "expires_in_hours": r2_result["expires_in_hours"]
+                            })
+                        else:
+                            result_info["r2_error"] = r2_result["error"]
+            else:
+                result_info.update({
+                    "success": True,
+                    "output": str(output),
+                    "local_path": None
+                })
+        else:
+            result_info.update({
+                "success": False,
+                "error": "No output received from model"
+            })
+
+        notify_message = f"Ideogram image generation {'completed' if result_info.get('success') else 'failed'}: {prompt[:50]}..."
+
+        # Include public URL in SMS notification if available
+        public_urls = []
+        expires_hours = None
+        if result_info.get("success") and result_info.get("public_url"):
+            public_urls.append(result_info["public_url"])
+            expires_hours = result_info.get("expires_in_hours")
+
+        notify = notify_status(notify_message, public_urls, expires_hours)
+        result_info["notification"] = notify
+
+        return result_info
+
+    except Exception as e:
+        notify_status(f"Ideogram image generation failed: {e}")
+        return {"error": str(e)}
+
+
+@mcp.tool(
+    description=(
         "Edit images using AI via Replicate's google/nano-banana model. "
         "Accepts image input (local file path or URL) and text prompts for modifications. "
-        "Can process images from Instagram scrapes, Unsplash downloads, or local files. "
+        "Can process images from Ideogram generation, Instagram scrapes, or local files. "
         "Returns edited image URL and saves locally. Sends notification after completion."
     )
 )
@@ -1168,13 +1361,17 @@ def image_edit_replicate(
 
 
 def _extract_image_url_from_tool_response(tool_response: Dict[str, Any]) -> Optional[str]:
-    """Extract the best image URL from responses from image_fetch_unsplash or image_edit_replicate."""
+    """Extract the best image URL from responses from Ideogram, Unsplash, or image editing tools."""
     if not isinstance(tool_response, dict):
         return None
 
-    # For image_edit_replicate responses
+    # For Ideogram and image_edit_replicate responses
     if "public_url" in tool_response:
         return tool_response["public_url"]
+
+    # For Ideogram responses with output_url
+    if "output_url" in tool_response:
+        return tool_response["output_url"]
 
     # For image_fetch_unsplash responses
     if "images" in tool_response and isinstance(tool_response["images"], list):
@@ -1187,12 +1384,107 @@ def _extract_image_url_from_tool_response(tool_response: Dict[str, Any]) -> Opti
 
 @mcp.tool(
     description=(
+        "Generate Instagram post images using Ideogram AI then refine with Nano Gemini editing. "
+        "Creates high-quality base images with Ideogram, then applies precise edits with Nano Gemini. "
+        "Perfect for creating branded Instagram content with text overlays, logos, and custom styling. "
+        "Supports Ideogram styles and aspect ratios, then Nano Gemini prompt-based editing. "
+        "Returns final edited image URL and saves locally. Sends notification after completion."
+    )
+)
+def instagram_generate_and_edit(
+    generation_prompt: str,
+    edit_prompt: str,
+    style_type: str = "AUTO",
+    aspect_ratio: str = "1:1",
+    magic_prompt_option: str = "AUTO",
+    negative_prompt: Optional[str] = None,
+    additional_edit_images: Optional[List[str]] = None,
+    save_locally: bool = True,
+) -> Dict[str, Any]:
+    """Generate Instagram post images using Ideogram AI then refine with Nano Gemini editing."""
+    try:
+        # Step 1: Generate base image with Ideogram
+        print(f"Step 1: Generating base image with Ideogram AI...")
+        ideogram_result = image_generate_ideogram(
+            prompt=generation_prompt,
+            style_type=style_type,
+            aspect_ratio=aspect_ratio,
+            magic_prompt_option=magic_prompt_option,
+            negative_prompt=negative_prompt,
+            save_locally=save_locally
+        )
+
+        if not ideogram_result.get("success"):
+            raise RuntimeError(f"Ideogram generation failed: {ideogram_result.get('error')}")
+
+        # Get the generated image URL
+        generated_image_url = None
+        if ideogram_result.get("public_url"):
+            generated_image_url = ideogram_result["public_url"]
+        elif ideogram_result.get("output_url"):
+            generated_image_url = ideogram_result["output_url"]
+        elif ideogram_result.get("local_path"):
+            generated_image_url = ideogram_result["local_path"]
+        else:
+            raise RuntimeError("No valid image URL or path found in Ideogram result")
+
+        # Step 2: Edit the generated image with Nano Gemini
+        print(f"Step 2: Editing generated image with Nano Gemini...")
+        edit_result = image_edit_replicate(
+            image_input=generated_image_url,
+            prompt=edit_prompt,
+            additional_images=additional_edit_images,
+            save_locally=save_locally
+        )
+
+        if not edit_result.get("success"):
+            raise RuntimeError(f"Nano Gemini editing failed: {edit_result.get('error')}")
+
+        # Combine results
+        final_result = {
+            "success": True,
+            "workflow": "ideogram_nano_gemini",
+            "generation_result": ideogram_result,
+            "edit_result": edit_result,
+            "generation_prompt": generation_prompt,
+            "edit_prompt": edit_prompt,
+            "style_type": style_type,
+            "aspect_ratio": aspect_ratio,
+            "final_image_url": edit_result.get("public_url") or edit_result.get("output_url"),
+            "final_local_path": edit_result.get("local_path"),
+            "r2_url": edit_result.get("r2_url"),
+            "public_url": edit_result.get("public_url"),
+            "expires_at": edit_result.get("expires_at"),
+            "expires_in_hours": edit_result.get("expires_in_hours")
+        }
+
+        # Send notification
+        notify_message = f"Instagram image generation & editing completed: {generation_prompt[:30]}... → {edit_prompt[:30]}..."
+
+        public_urls = []
+        expires_hours = None
+        if final_result.get("public_url"):
+            public_urls.append(final_result["public_url"])
+            expires_hours = final_result.get("expires_in_hours")
+
+        notify = notify_status(notify_message, public_urls, expires_hours)
+        final_result["notification"] = notify
+
+        return final_result
+
+    except Exception as e:
+        notify_status(f"Instagram image generation & editing failed: {e}")
+        return {"error": str(e), "workflow": "ideogram_nano_gemini"}
+
+
+@mcp.tool(
+    description=(
         "Schedule Instagram posts using Late.dev API. "
         "Supports posting single images or multi-slide carousels from local files, R2 storage URLs, or external URLs. "
         "Can schedule posts for later or publish immediately. "
         "Requires Instagram Business account and Late.dev API key. "
         "Sends notification with post URL after successful scheduling. "
-        "For best results, use R2 URLs from image_fetch_unsplash or image_edit_replicate tools. "
+        "For best results, use AI-generated images from instagram_generate_and_edit() or image_generate_ideogram(). "
         "Use content_type='carousel' with multiple image_sources for multi-slide posts. "
         "Use instagram_get_accounts() to find your instagram_account_id."
     )
