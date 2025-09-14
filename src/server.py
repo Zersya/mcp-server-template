@@ -72,7 +72,7 @@ def notify_status(message: str, image_urls: Optional[List[str]] = None, expires_
                 "Content-Type": "application/json",
             },
             json={"message": enhanced_message},
-            timeout=15,
+            timeout=90,
         )
         return {
             "sent": resp.ok,
@@ -99,7 +99,7 @@ def _download_image(url: str, filename: str) -> Dict[str, Any]:
         images_dir = _ensure_images_dir()
         file_path = images_dir / filename
 
-        response = requests.get(url, timeout=30)
+        response = requests.get(url, timeout=90)
         response.raise_for_status()
 
         with open(file_path, 'wb') as f:
@@ -281,7 +281,7 @@ def _late_api_request(
     api_key: str,
     json_data: Optional[Dict] = None,
     max_retries: int = 0,
-    timeout: int = 30
+    timeout: int = 90
 ) -> Dict[str, Any]:
     """Make a request to Late.dev API with retry logic and better error handling."""
     import time
@@ -878,7 +878,7 @@ def instagram_scrape(
                 "apifyProxyCountry": proxy_country,
             }
 
-        run = client.actor("apify/instagram-scraper").call(run_input=run_input)
+        run = client.actor("apify/instagram-scraper").call(run_input=run_input, timeout_secs=900)
 
         # Check if run was successful
         if not run:
@@ -1076,7 +1076,7 @@ def image_fetch_unsplash(
 
         headers = {"Authorization": f"Client-ID {access_key}"}
 
-        response = requests.get(url, params=params, headers=headers, timeout=30)
+        response = requests.get(url, params=params, headers=headers, timeout=90)
         response.raise_for_status()
 
         data = response.json()
@@ -1131,7 +1131,7 @@ def image_fetch_unsplash(
                     # Track download with Unsplash (required by API terms)
                     try:
                         track_url = photo["links"]["download_location"]
-                        requests.get(track_url, headers=headers, timeout=10)
+                        requests.get(track_url, headers=headers, timeout=90)
                     except Exception:
                         pass  # Don't fail if tracking fails
 
@@ -1180,9 +1180,9 @@ def image_generate_ideogram(
     prompt: str,
     platform: str = "instagram",
     content_type: str = "post",
-    style_type: str = "AUTO",
+    style_type: str = "Auto",
     aspect_ratio: Optional[str] = None,
-    magic_prompt_option: str = "AUTO",
+    magic_prompt_option: str = "Auto",
     negative_prompt: Optional[str] = None,
     brand_colors: Optional[str] = None,
     text_overlay: Optional[str] = None,
@@ -1211,7 +1211,7 @@ def image_generate_ideogram(
         if content_type not in valid_content_types:
             raise ValueError(f"content_type must be one of: {', '.join(valid_content_types)}")
 
-        valid_styles = ["AUTO", "REALISTIC", "ANIME", "RENDER_3D", "CINEMATIC"]
+        valid_styles = ["Auto", "Realistic", "Anime", "Render 3D", "Cinematic"]
         if style_type not in valid_styles:
             raise ValueError(f"style_type must be one of: {', '.join(valid_styles)}")
 
@@ -1227,7 +1227,7 @@ def image_generate_ideogram(
         if aspect_ratio not in valid_ratios:
             raise ValueError(f"aspect_ratio must be one of: {', '.join(valid_ratios)}")
 
-        valid_magic_prompts = ["AUTO", "ON", "OFF"]
+        valid_magic_prompts = ["Auto", "On", "Off"]
         if magic_prompt_option not in valid_magic_prompts:
             raise ValueError(f"magic_prompt_option must be one of: {', '.join(valid_magic_prompts)}")
 
@@ -1251,7 +1251,8 @@ def image_generate_ideogram(
         # Run the model
         output = replicate.run(
             "ideogram-ai/ideogram-v3-turbo",
-            input=model_input
+            input=model_input,
+            timeout=900  # 15 minutes max
         )
 
         # Process output
