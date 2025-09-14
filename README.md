@@ -121,7 +121,27 @@ instagram_scrape(
 ## MCP Tools
 
 ### Instagram Scraping
-- `instagram_scrape(username: string[], results_limit?: number=30, proxy_country?: string)`
+- `instagram_scrape(direct_urls?: string[], results_limit?: number=200, results_type?: string="posts", add_parent_data?: boolean=false, enhance_user_search_with_facebook_page?: boolean=false, is_user_reel_feed_url?: boolean=false, is_user_tagged_feed_url?: boolean=false, search_type?: string, search_query?: string, search_limit?: number=1, proxy_country?: string)`
+
+Example matching Apify input:
+```json
+{
+  "addParentData": false,
+  "directUrls": [
+    "https://www.instagram.com/kugie.app/"
+  ],
+  "enhanceUserSearchWithFacebookPage": false,
+  "isUserReelFeedURL": false,
+  "isUserTaggedFeedURL": false,
+  "resultsLimit": 200,
+  "resultsType": "posts",
+  "searchLimit": 1,
+  "searchType": "hashtag"
+}
+```
+Notes:
+- You can pass plain usernames in `direct_urls` (e.g., "kugie.app" or "@kugie.app"); they will be converted to `https://www.instagram.com/<username>/` automatically.
+- For searches, provide both `search_type` (e.g., "hashtag") and `search_query` (e.g., "sunset").
 
 ### Image Operations
 - `image_fetch_unsplash(query: string, count?: number=5, orientation?: string, color?: string, download_images?: boolean=true)`

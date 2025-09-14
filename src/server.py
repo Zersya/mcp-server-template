@@ -220,13 +220,24 @@ def _upload_to_r2(local_path: str, folder: str, filename: str) -> Dict[str, Any]
     )
 )
 def instagram_scrape(
-    username: List[str],
-    results_limit: int = 30,
+    direct_urls: Optional[List[str]] = None,
+    results_limit: int = 200,
+    results_type: str = "posts",
+    add_parent_data: bool = False,
+    enhance_user_search_with_facebook_page: bool = False,
+    is_user_reel_feed_url: bool = False,
+    is_user_tagged_feed_url: bool = False,
+    search_type: Optional[str] = None,
+    search_query: Optional[str] = None,
+    search_limit: int = 1,
     proxy_country: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
-        if not username or len(username) == 0:
-            raise ValueError("Provide at least one username, profile URL, or post URL")
+        # Validate input: either direct URLs (or usernames to convert), or search parameters
+        has_direct = bool(direct_urls and len(direct_urls) > 0)
+        has_search = bool(search_type and search_query)
+        if not (has_direct or has_search):
+            raise ValueError("Provide either direct_urls (usernames or URLs) or both search_type and search_query")
 
         token = _env("APIFY_TOKEN")
         if not token:
@@ -234,31 +245,40 @@ def instagram_scrape(
         if ApifyClient is None:
             raise RuntimeError("apify-client is not installed")
 
-        # Convert plain usernames to Instagram URLs
-        processed_usernames = []
-        conversions = []
-
-        for user in username:
-            if user.startswith(("http://", "https://")):
-                # Already a URL, keep as is
-                processed_usernames.append(user)
-            else:
-                # Plain username, convert to Instagram URL
-                # Remove @ symbol if present
-                clean_username = user.lstrip('@')
-                instagram_url = f"https://www.instagram.com/{clean_username}/"
-                processed_usernames.append(instagram_url)
-                conversions.append(f"{user} -> {instagram_url}")
-
-        # Log conversions for debugging
-        if conversions:
-            print(f"Username conversions: {conversions}")
+        # Convert plain usernames in direct_urls to Instagram URLs
+        processed_direct_urls: List[str] = []
+        conversions: List[str] = []
+        if has_direct:
+            for u in direct_urls or []:
+                if isinstance(u, str) and u.startswith(("http://", "https://")):
+                    processed_direct_urls.append(u)
+                else:
+                    clean = (u or "").lstrip('@').strip()
+                    if not clean:
+                        continue
+                    url = f"https://www.instagram.com/{clean}/"
+                    processed_direct_urls.append(url)
+                    conversions.append(f"{u} -> {url}")
+            if conversions:
+                print(f"Direct URL conversions: {conversions}")
 
         client = ApifyClient(token)
         run_input: Dict[str, Any] = {
-            "username": processed_usernames,
-            "resultsLimit": results_limit
+            "resultsLimit": int(results_limit),
+            "resultsType": results_type,
+            "addParentData": bool(add_parent_data),
+            "enhanceUserSearchWithFacebookPage": bool(enhance_user_search_with_facebook_page),
+            "isUserReelFeedURL": bool(is_user_reel_feed_url),
+            "isUserTaggedFeedURL": bool(is_user_tagged_feed_url),
         }
+
+        if processed_direct_urls:
+            run_input["directUrls"] = processed_direct_urls
+
+        if has_search:
+            run_input["searchType"] = search_type
+            run_input["search"] = search_query
+            run_input["searchLimit"] = int(search_limit)
 
         # Add proxy configuration if specified
         if proxy_country:
@@ -307,9 +327,14 @@ def instagram_scrape(
             "items": items,
             "notification": notify,
             "input_processing": {
-                "original_usernames": username,
-                "processed_usernames": processed_usernames,
-                "conversions": conversions if conversions else "No conversions needed"
+                "original_direct_urls": direct_urls or [],
+                "processed_direct_urls": processed_direct_urls,
+                "conversions": conversions if conversions else "No conversions needed",
+                "search": {
+                    "search_type": search_type,
+                    "search_query": search_query,
+                    "search_limit": search_limit
+                } if has_search else None
             },
             "run_info": {
                 "id": run.get("id"),
