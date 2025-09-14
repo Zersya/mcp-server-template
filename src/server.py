@@ -39,6 +39,23 @@ except Exception:  # library may not be installed yet
 mcp = FastMCP("Social Media Toolkit for Instagram & Tiktok", log_level="DEBUG")
 
 
+
+# -------------------- Job Queue Setup --------------------
+try:
+    from job_queue import JobQueue  # local module providing SQLite-backed job queue
+    JOB_DB_PATH = os.environ.get("JOB_DB_PATH", "jobs.db")
+    job_queue = JobQueue(JOB_DB_PATH)
+except Exception:
+    job_queue = None  # type: ignore
+
+
+def _enqueue_job(job_type: str, payload: Dict[str, Any], priority: int = 0, max_attempts: int = 5) -> Dict[str, Any]:
+    """Enqueue a background job and return the job id immediately."""
+    if job_queue is None:
+        raise RuntimeError("Job queue not initialized")
+    job_id = job_queue.enqueue(job_type, payload, priority=priority, max_attempts=max_attempts)
+    return {"job_id": job_id, "status": "queued"}
+
 # -------------------- Instagram / Apify helpers --------------------
 
 def _env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -419,14 +436,14 @@ def _upload_to_r2(local_path: str, folder: str, filename: str) -> Dict[str, Any]
             # This URL does not expire, so we set expiration to None
             expires_at = None
             expires_in_hours = None
-        
+
         # 2. Fallback to a secure, temporary presigned URL if no custom domain is set
         else:
             expires_in_seconds = 24 * 60 * 60  # 24 hours
             expires_at_dt = datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
             expires_at = expires_at_dt.isoformat() + "Z"
             expires_in_hours = 24
-            
+
             try:
                 public_url = client.generate_presigned_url(
                     'get_object',
@@ -1998,6 +2015,8 @@ def instagram_post_schedule(
             post_url = result_data["post"]["url"]
             post_info["post_url"] = post_url
 
+
+
         # Send notification
         notify_message = f"Instagram post {'scheduled' if not publish_now else 'published'}: {content[:50]}..."
         if post_url:
@@ -2014,6 +2033,171 @@ def instagram_post_schedule(
         return {"error": str(e)}
 
 
+
+# -------------------- Async Job Submission Tools --------------------
+@mcp.tool(
+    description=(
+        "Submit an Instagram scraping job to be processed in the background. "
+        "Returns a job_id immediately; use job_status(job_id) to check progress."
+    )
+)
+def job_submit_instagram_scrape(
+    direct_urls: Optional[List[str]] = None,
+    results_limit: int = 200,
+    results_type: str = "posts",
+    add_parent_data: bool = False,
+    enhance_user_search_with_facebook_page: bool = False,
+    is_user_reel_feed_url: bool = False,
+    is_user_tagged_feed_url: bool = False,
+    search_type: Optional[str] = None,
+    search_query: Optional[str] = None,
+    search_limit: int = 1,
+    proxy_country: Optional[str] = None,
+    force_scrape: bool = False,
+    max_age_hours: int = 24,
+    priority: int = 0,
+    max_attempts: int = 5,
+) -> Dict[str, Any]:
+    payload = {
+        "direct_urls": direct_urls,
+        "results_limit": results_limit,
+        "results_type": results_type,
+        "add_parent_data": add_parent_data,
+        "enhance_user_search_with_facebook_page": enhance_user_search_with_facebook_page,
+        "is_user_reel_feed_url": is_user_reel_feed_url,
+        "is_user_tagged_feed_url": is_user_tagged_feed_url,
+        "search_type": search_type,
+        "search_query": search_query,
+        "search_limit": search_limit,
+        "proxy_country": proxy_country,
+        "force_scrape": force_scrape,
+        "max_age_hours": max_age_hours,
+    }
+    return _enqueue_job("instagram_scrape", payload, priority=priority, max_attempts=max_attempts)
+
+
+@mcp.tool(
+    description=(
+        "Submit an Ideogram image generation job to be processed in the background. "
+        "Returns a job_id immediately; use job_status(job_id) to check progress."
+    )
+)
+def job_submit_image_generate_ideogram(
+    prompt: str,
+    platform: str = "instagram",
+    content_type: str = "post",
+    style_type: str = "Auto",
+    aspect_ratio: Optional[str] = None,
+    magic_prompt_option: str = "Auto",
+    negative_prompt: Optional[str] = None,
+    brand_colors: Optional[str] = None,
+    text_overlay: Optional[str] = None,
+    include_logo_hint: bool = False,
+    engagement_focus: str = "medium",
+    save_locally: bool = True,
+    priority: int = 0,
+    max_attempts: int = 5,
+) -> Dict[str, Any]:
+    payload = {
+        "prompt": prompt,
+        "platform": platform,
+        "content_type": content_type,
+        "style_type": style_type,
+        "aspect_ratio": aspect_ratio,
+        "magic_prompt_option": magic_prompt_option,
+        "negative_prompt": negative_prompt,
+        "brand_colors": brand_colors,
+        "text_overlay": text_overlay,
+        "include_logo_hint": include_logo_hint,
+        "engagement_focus": engagement_focus,
+        "save_locally": save_locally,
+    }
+    return _enqueue_job("image_generate_ideogram", payload, priority=priority, max_attempts=max_attempts)
+
+
+@mcp.tool(
+    description=(
+        "Submit an image editing job (Replicate) to be processed in the background. "
+        "Returns a job_id immediately; use job_status(job_id) to check progress."
+    )
+)
+def job_submit_image_edit_replicate(
+    image_input: str,
+    prompt: str,
+    additional_images: Optional[List[str]] = None,
+    save_locally: bool = True,
+    priority: int = 0,
+    max_attempts: int = 5,
+) -> Dict[str, Any]:
+    payload = {
+        "image_input": image_input,
+        "prompt": prompt,
+        "additional_images": additional_images,
+        "save_locally": save_locally,
+    }
+    return _enqueue_job("image_edit_replicate", payload, priority=priority, max_attempts=max_attempts)
+
+
+@mcp.tool(
+    description=(
+        "Submit a combined Instagram generate+edit workflow job in the background. "
+        "Returns a job_id immediately; use job_status(job_id) to check progress."
+    )
+)
+def job_submit_instagram_generate_and_edit(
+    generation_prompt: str,
+    edit_prompt: str,
+    style_type: str = "AUTO",
+    aspect_ratio: str = "1:1",
+    magic_prompt_option: str = "AUTO",
+    negative_prompt: Optional[str] = None,
+    additional_edit_images: Optional[List[str]] = None,
+    save_locally: bool = True,
+    priority: int = 0,
+    max_attempts: int = 5,
+) -> Dict[str, Any]:
+    payload = {
+        "generation_prompt": generation_prompt,
+        "edit_prompt": edit_prompt,
+        "style_type": style_type,
+        "aspect_ratio": aspect_ratio,
+        "magic_prompt_option": magic_prompt_option,
+        "negative_prompt": negative_prompt,
+        "additional_edit_images": additional_edit_images,
+        "save_locally": save_locally,
+    }
+    return _enqueue_job("instagram_generate_and_edit", payload, priority=priority, max_attempts=max_attempts)
+
+
+@mcp.tool(description="Get the status/details of a background job by job_id.")
+def job_status(job_id: str) -> Dict[str, Any]:
+    if job_queue is None:
+        return {"error": "Job queue not initialized"}
+    data = job_queue.get(job_id)
+    return data or {"error": "Job not found", "job_id": job_id}
+
+
+@mcp.tool(description="Get aggregated queue statistics (counts per status, oldest pending).")
+def queue_stats() -> Dict[str, Any]:
+    if job_queue is None:
+        return {"error": "Job queue not initialized"}
+    return job_queue.stats()
+
+
+@mcp.tool(
+    description=(
+        "Cleanup old completed/failed jobs. Requires ADMIN_TOKEN env; provide admin_token arg to authorize."
+    )
+)
+def queue_cleanup(max_age_hours: int = 72, statuses: Optional[List[str]] = None, admin_token: Optional[str] = None) -> Dict[str, Any]:
+    expected = os.environ.get("ADMIN_TOKEN")
+    if not expected or admin_token != expected:
+        return {"error": "Unauthorized: invalid or missing admin_token"}
+    if job_queue is None:
+        return {"error": "Job queue not initialized"}
+    sts = tuple(statuses) if statuses else ("completed", "failed")
+    return job_queue.cleanup(max_age_hours=max_age_hours, statuses=sts)
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0"
@@ -2023,5 +2207,5 @@ if __name__ == "__main__":
     mcp.run(
         transport="http",
         host=host,
-        port=port, 
+        port=port,
     )

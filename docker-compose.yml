@@ -24,9 +24,44 @@ services:
       - CLOUDFLARE_R2_BUCKET_NAME=${CLOUDFLARE_R2_BUCKET_NAME}
       - CLOUDFLARE_R2_PUBLIC_DOMAIN=${CLOUDFLARE_R2_PUBLIC_DOMAIN}
       - MCP_SCRAPE_ITEMS_MAX=${MCP_SCRAPE_ITEMS_MAX:-50}
+      - JOB_DB_PATH=/app/data/jobs.db
+      - JOB_POLL_INTERVAL=${JOB_POLL_INTERVAL:-1.0}
+      - ADMIN_TOKEN=${ADMIN_TOKEN}
+
       - LATE_DEV_API_KEY=${LATE_DEV_API_KEY}
     volumes:
       - ./data:/app/data
       - ./images:/app/images
     restart: unless-stopped
 
+  mcp-worker:
+    image: mcp-server-template:latest
+    container_name: mcp-worker
+    environment:
+      - JOB_DB_PATH=/app/data/jobs.db
+      - JOB_POLL_INTERVAL=${JOB_POLL_INTERVAL:-1.0}
+      - APIFY_TOKEN=${APIFY_TOKEN}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY}
+      - POKE_API_KEY=${POKE_API_KEY}
+      - NOTIFY_API_KEY=${NOTIFY_API_KEY}
+      - NOTIFY_URL=${NOTIFY_URL}
+      - CLOUDFLARE_R2_ACCOUNT_ID=${CLOUDFLARE_R2_ACCOUNT_ID}
+      - CLOUDFLARE_R2_ACCESS_KEY_ID=${CLOUDFLARE_R2_ACCESS_KEY_ID}
+      - CLOUDFLARE_R2_SECRET_ACCESS_KEY=${CLOUDFLARE_R2_SECRET_ACCESS_KEY}
+      - CLOUDFLARE_R2_BUCKET_NAME=${CLOUDFLARE_R2_BUCKET_NAME}
+      - CLOUDFLARE_R2_PUBLIC_DOMAIN=${CLOUDFLARE_R2_PUBLIC_DOMAIN}
+      - LATE_DEV_API_KEY=${LATE_DEV_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./images:/app/images
+    depends_on:
+      - mcp-server
+    restart: unless-stopped
+    command: ["python", "src/worker.py"]
+
+volumes:
+  data:
+    driver: local
+  images:
+    driver: local

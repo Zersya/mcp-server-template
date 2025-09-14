@@ -246,3 +246,64 @@ def calculate(x: float, y: float, operation: str) -> float:
         return x * y
     # ...
 ```
+
+
+## Async Background Job Queue
+
+This project now includes a SQLite-backed background job queue to run time‑intensive tasks asynchronously:
+
+- Image generation (Ideogram) → `job_submit_image_generate_ideogram()`
+- Image editing (Replicate) → `job_submit_image_edit_replicate()`
+- Instagram scrape (Apify) → `job_submit_instagram_scrape()`
+- Combined IG generate+edit → `job_submit_instagram_generate_and_edit()`
+- Check status → `job_status(job_id)`
+- Admin/monitor → `queue_stats()`, `queue_cleanup(max_age_hours?, statuses?, admin_token)`
+
+### How it works
+1. Client calls a `job_submit_*` tool. The server enqueues a job and immediately returns `{ job_id, status: "queued" }`.
+2. A separate worker process polls the queue and executes jobs by calling the existing synchronous tools internally.
+3. Job results and errors are stored in the queue. Existing SMS notifications continue to be sent by the underlying tools.
+
+### Environment variables
+- `JOB_DB_PATH` (default: `jobs.db`): SQLite database file for the queue
+- `ADMIN_TOKEN`: Required to authorize `queue_cleanup`
+- `JOB_POLL_INTERVAL` (default: `1.0`): Worker poll interval in seconds
+
+### Database migration
+A SQL migration is provided:
+
+```
+migrations/001_create_job_queue.sql
+```
+
+Apply it before starting the worker.
+
+### Run locally
+1) Migrate the DB (create `jobs` table)
+2) Start the MCP server as usual
+3) Start the background worker in a separate terminal
+
+See the Commands section below.
+
+### Backward compatibility
+- All existing synchronous tools remain unchanged and continue to work.
+- New `job_submit_*` tools are additive and preferred for long-running tasks.
+
+
+## Commands (setup and run)
+
+Run these from the repository root:
+
+```bash
+# 1) Create the jobs table (SQLite)
+sqlite3 ${JOB_DB_PATH:-jobs.db} < migrations/001_create_job_queue.sql
+
+# 2) Start the MCP server
+python src/server.py
+
+# 3) In a separate terminal, start the background worker
+python src/worker.py
+
+# Optional: check queue stats via MCP tool (from an MCP client)
+# call tool queue_stats
+```

@@ -17,6 +17,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY src ./src
+COPY migrations ./migrations
 
 # Create runtime dirs (persisted via volumes in compose)
 RUN mkdir -p data images
