@@ -25,10 +25,6 @@ services:
       - CLOUDFLARE_R2_PUBLIC_DOMAIN=${CLOUDFLARE_R2_PUBLIC_DOMAIN}
       - MCP_SCRAPE_ITEMS_MAX=${MCP_SCRAPE_ITEMS_MAX:-50}
       - LATE_DEV_API_KEY=${LATE_DEV_API_KEY}
-    labels:
-      - traefik.http.services.mcp-server.loadbalancer.timeout.read=900s
-      - traefik.http.services.mcp-server.loadbalancer.timeout.write=900s
-      - traefik.http.services.mcp-server.loadbalancer.timeout.idle=900s
     volumes:
       - ./data:/app/data
       - ./images:/app/images
