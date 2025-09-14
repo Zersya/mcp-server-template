@@ -469,6 +469,91 @@ def kb_check_instagram_data(
 
 @mcp.tool(
     description=(
+        "Get connected Instagram accounts from Late.dev API. "
+        "Returns all connected social accounts with their IDs, usernames, and status. "
+        "Use this to find the instagram_account_id needed for instagram_post_schedule. "
+        "Requires Late.dev API key configuration."
+    )
+)
+def instagram_get_accounts() -> Dict[str, Any]:
+    """Get connected Instagram accounts from Late.dev API."""
+    try:
+        # Validate API key
+        api_key = _env("LATE_DEV_API_KEY")
+        if not api_key:
+            raise RuntimeError("LATE_DEV_API_KEY not configured")
+
+        # Make API request to Late.dev
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        response = requests.get(
+            "https://getlate.dev/api/v1/accounts",
+            headers=headers,
+            timeout=30
+        )
+
+        if not response.ok:
+            error_msg = f"Late.dev API error: HTTP {response.status_code}"
+            try:
+                error_data = response.json()
+                if "error" in error_data:
+                    error_msg += f" - {error_data['error']}"
+            except:
+                error_msg += f" - {response.text}"
+
+            if response.status_code == 401:
+                error_msg += " (Invalid Late.dev API key)"
+            elif response.status_code == 403:
+                error_msg += " (Access forbidden)"
+
+            raise RuntimeError(error_msg)
+
+        accounts_data = response.json()
+
+        if not isinstance(accounts_data, list):
+            raise RuntimeError("Invalid response format from Late.dev API")
+
+        # Filter for Instagram accounts and add helpful information
+        instagram_accounts = []
+        other_accounts = []
+
+        for account in accounts_data:
+            if not isinstance(account, dict):
+                continue
+
+            account_info = {
+                "platform": account.get("platform", "unknown"),
+                "account_id": account.get("accountId"),
+                "username": account.get("username"),
+                "display_name": account.get("displayName"),
+                "is_active": account.get("isActive", False),
+                "raw_data": account
+            }
+
+            if account_info["platform"] == "instagram":
+                instagram_accounts.append(account_info)
+            else:
+                other_accounts.append(account_info)
+
+        return {
+            "success": True,
+            "instagram_accounts": instagram_accounts,
+            "other_accounts": other_accounts,
+            "total_accounts": len(accounts_data),
+            "instagram_count": len(instagram_accounts),
+            "api_response": accounts_data,
+            "usage_hint": "Use the account_id from instagram_accounts for instagram_post_schedule"
+        }
+
+    except Exception as e:
+        return {"error": str(e), "success": False}
+
+
+@mcp.tool(
+    description=(
         "Scrape Instagram via Apify instagram-scraper. "
         "Accepts usernames (automatically converted to URLs), profile URLs, or post URLs. "
         "Plain usernames like 'kugie.app' are automatically converted to 'https://www.instagram.com/kugie.app/'. "
@@ -1028,17 +1113,20 @@ def _extract_image_url_from_tool_response(tool_response: Dict[str, Any]) -> Opti
 @mcp.tool(
     description=(
         "Schedule Instagram posts using Late.dev API. "
-        "Supports posting images from local files, R2 storage URLs, or external URLs. "
+        "Supports posting single images or multi-slide carousels from local files, R2 storage URLs, or external URLs. "
         "Can schedule posts for later or publish immediately. "
         "Requires Instagram Business account and Late.dev API key. "
         "Sends notification with post URL after successful scheduling. "
-        "For best results, use R2 URLs from image_fetch_unsplash or image_edit_replicate tools."
+        "For best results, use R2 URLs from image_fetch_unsplash or image_edit_replicate tools. "
+        "Use content_type='carousel' with multiple image_sources for multi-slide posts. "
+        "Use instagram_get_accounts() to find your instagram_account_id."
     )
 )
 def instagram_post_schedule(
     content: str,
-    image_source: str,
     instagram_account_id: str,
+    image_source: Optional[str] = None,
+    image_sources: Optional[List[str]] = None,
     schedule_time: Optional[str] = None,
     timezone: str = "UTC",
     publish_now: bool = False,
@@ -1059,36 +1147,73 @@ def instagram_post_schedule(
         if not instagram_account_id.strip():
             raise ValueError("Instagram account ID is required")
 
-        # Process image source
-        image_url = None
-        local_file_info = None
+        # Validate content type
+        valid_content_types = ["post", "story", "carousel", "reel"]
+        if content_type not in valid_content_types:
+            raise ValueError(f"content_type must be one of: {', '.join(valid_content_types)}")
 
-        if image_source:
-            if image_source.startswith(("http://", "https://")):
+        # Validate image sources
+        if not image_source and not image_sources:
+            raise ValueError("Either image_source (single) or image_sources (multiple) must be provided")
+
+        if image_source and image_sources:
+            raise ValueError("Use either image_source (single) or image_sources (multiple), not both")
+
+        # Validate carousel requirements
+        if content_type == "carousel" and (not image_sources or len(image_sources) < 2):
+            raise ValueError("Carousel posts require at least 2 images in image_sources")
+
+        if image_sources and len(image_sources) > 10:
+            raise ValueError("Instagram carousel posts can have maximum 10 images")
+
+        # Determine if this is a carousel post
+        is_carousel = content_type == "carousel" or (image_sources and len(image_sources) > 1)
+
+        if is_carousel and content_type != "carousel":
+            content_type = "carousel"
+
+        # Process image sources
+        media_items = []
+        local_file_info = []
+
+        sources = image_sources if image_sources else ([image_source] if image_source else [])
+
+        for i, source in enumerate(sources):
+            if not source:
+                continue
+
+            if source.startswith(("http://", "https://")):
                 # External URL (including R2 URLs)
-                image_url = image_source
+                media_items.append({
+                    "type": "image",
+                    "url": source
+                })
             else:
                 # Local file path - try to upload to R2 first
-                image_path = Path(image_source)
+                image_path = Path(source)
                 if not image_path.exists():
                     # Try images directory
-                    image_path = Path("images") / image_source
+                    image_path = Path("images") / source
 
                 if not image_path.exists():
-                    raise FileNotFoundError(f"Image file not found: {image_source}")
+                    raise FileNotFoundError(f"Image file not found: {source}")
 
                 # Upload to R2 for better reliability
-                filename = image_path.name
+                filename = f"instagram_{i}_{image_path.name}"
                 r2_result = _upload_to_r2(str(image_path), "instagram", filename)
 
                 if r2_result["success"]:
-                    image_url = r2_result["public_url"]
-                    local_file_info = {
+                    media_items.append({
+                        "type": "image",
+                        "url": r2_result["public_url"]
+                    })
+                    local_file_info.append({
                         "local_path": str(image_path),
                         "r2_key": r2_result["r2_key"],
                         "r2_url": r2_result["r2_url"],
-                        "expires_at": r2_result["expires_at"]
-                    }
+                        "expires_at": r2_result["expires_at"],
+                        "media_index": i
+                    })
                 else:
                     # Fallback: provide guidance for manual URL usage
                     raise ValueError(
@@ -1096,6 +1221,9 @@ def instagram_post_schedule(
                         "Please use image_fetch_unsplash or image_edit_replicate tools "
                         "which automatically provide R2 URLs, or provide a direct image URL."
                     )
+
+        if len(media_items) == 0:
+            raise ValueError("No valid images found")
 
         # Build Late.dev API request
         headers = {
@@ -1110,10 +1238,17 @@ def instagram_post_schedule(
         }
 
         # Add platform-specific options
+        platform_specific_data = {}
+
         if content_type == "story":
-            platform_data["platformSpecificData"] = {"contentType": "story"}
+            platform_specific_data["contentType"] = "story"
+        elif content_type == "carousel":
+            platform_specific_data["instagramSettings"] = {"postType": "carousel"}
         elif collaborators:
-            platform_data["platformSpecificData"] = {"collaborators": collaborators}
+            platform_specific_data["collaborators"] = collaborators
+
+        if platform_specific_data:
+            platform_data["platformSpecificData"] = platform_specific_data
 
         # Build request payload
         payload = {
@@ -1121,14 +1256,9 @@ def instagram_post_schedule(
             "platforms": [platform_data]
         }
 
-        # Add media if image provided
-        if image_url:
-            payload["mediaItems"] = [
-                {
-                    "type": "image",
-                    "url": image_url
-                }
-            ]
+        # Add media items
+        if media_items:
+            payload["mediaItems"] = media_items
 
         # Handle scheduling
         if not publish_now and schedule_time:
@@ -1169,7 +1299,8 @@ def instagram_post_schedule(
         post_info = {
             "success": True,
             "content": content,
-            "image_url": image_url,
+            "media_items": media_items,
+            "media_count": len(media_items),
             "instagram_account_id": instagram_account_id,
             "content_type": content_type,
             "scheduled": not publish_now,
