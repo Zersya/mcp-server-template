@@ -303,10 +303,16 @@ def instagram_scrape(
             if not dataset_id:
                 raise RuntimeError(f"Apify actor run failed - no dataset ID returned. Run response: {run}")
 
+        # Retrieve only a sample of items in the initial response to keep payloads small
         items: List[Dict[str, Any]] = []
+        truncated = False
+        max_items = int((_env("MCP_SCRAPE_ITEMS_MAX", "50") or "50"))
         try:
             for item in client.dataset(dataset_id).iterate_items():
                 items.append(item)
+                if len(items) >= max_items:
+                    truncated = True
+                    break
         except Exception as dataset_error:
             raise RuntimeError(f"Failed to retrieve dataset items: {dataset_error}")
 
@@ -323,7 +329,9 @@ def instagram_scrape(
             "status": status,
             "actor": "apify/instagram-scraper",
             "dataset_id": dataset_id,
-            "items_count": len(items),
+            "items_returned": len(items),
+            "items_truncated": truncated,
+            "items_max_in_response": max_items,
             "items": items,
             "notification": notify,
             "input_processing": {
@@ -336,16 +344,78 @@ def instagram_scrape(
                     "search_limit": search_limit
                 } if has_search else None
             },
+            "paging": {
+                "hint": "Use instagram_dataset_fetch(dataset_id, offset, limit) to page through all items",
+                "next_offset": len(items) if truncated else None,
+                "default_limit": 100
+            },
             "run_info": {
                 "id": run.get("id"),
                 "status": status,
                 "started_at": run.get("startedAt"),
-                "finished_at": run.get("finishedAt"),
+                "finished_at": run.get("FinishedAt") or run.get("finishedAt"),
                 "usage": run.get("usage", {})
             }
         }
     except Exception as e:
         notify_status(f"Instagram scraping failed: {e}")
+        return {"error": str(e)}
+
+
+@mcp.tool(
+    description=(
+        "Fetch items from an Apify dataset produced by instagram_scrape with pagination. "
+        "Use this to page through all results without large payloads."
+    )
+)
+def instagram_dataset_fetch(
+    dataset_id: str,
+    offset: int = 0,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    try:
+        token = _env("APIFY_TOKEN")
+        if not token:
+            raise RuntimeError("APIFY_TOKEN not configured")
+        if ApifyClient is None:
+            raise RuntimeError("apify-client is not installed")
+
+        client = ApifyClient(token)
+        ds = client.dataset(dataset_id)
+
+        items: List[Dict[str, Any]] = []
+        used_list_api = False
+        try:
+            # Prefer list_items if available for efficient paging
+            if hasattr(ds, "list_items"):
+                used_list_api = True
+                resp = ds.list_items(limit=int(limit), offset=int(offset))
+                items = resp.get("items", []) if isinstance(resp, dict) else resp or []
+            else:
+                # Fallback: iterate and slice
+                idx = 0
+                for itm in ds.iterate_items():
+                    if idx >= offset and len(items) < limit:
+                        items.append(itm)
+                    idx += 1
+                    if len(items) >= limit:
+                        break
+        except Exception as e:
+            raise RuntimeError(f"Failed to fetch dataset items: {e}")
+
+        next_offset = offset + len(items)
+        more_available = len(items) == limit
+
+        return {
+            "dataset_id": dataset_id,
+            "items_count": len(items),
+            "items": items,
+            "offset": offset,
+            "limit": limit,
+            "next_offset": next_offset if more_available else None,
+            "paging_method": "list_items" if used_list_api else "iterate_items",
+        }
+    except Exception as e:
         return {"error": str(e)}
 
 

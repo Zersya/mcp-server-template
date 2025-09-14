@@ -80,23 +80,31 @@ Schedule and publish Instagram posts using the Late.dev API with images from Uns
 
 ### Instagram Scraping with Username Conversion
 ```python
-# Plain usernames (automatically converted to URLs)
+# Plain usernames (automatically converted to profile URLs)
 instagram_scrape(
-    username=["kugie.app", "natgeo", "@nasa"],  # @ symbol is automatically removed
+    direct_urls=["kugie.app", "natgeo", "@nasa"],  # @ symbol is automatically removed
     results_limit=30
 )
-# Converts to: ["https://www.instagram.com/kugie.app/", "https://www.instagram.com/natgeo/", "https://www.instagram.com/nasa/"]
+# Converted internally to:
+# ["https://www.instagram.com/kugie.app/",
+#  "https://www.instagram.com/natgeo/",
+#  "https://www.instagram.com/nasa/"]
 
-# Mixed input types
+# Mixed input types (username, profile URL, post URL)
 instagram_scrape(
-    username=[
+    direct_urls=[
         "kugie.app",  # Plain username -> converted to URL
         "https://www.instagram.com/natgeo/",  # Profile URL -> kept as is
         "https://www.instagram.com/p/ABC123/"  # Post URL -> kept as is
     ],
     results_limit=50
 )
+
+# Page through all items after the initial sample
+page1 = instagram_dataset_fetch(dataset_id=result["dataset_id"], offset=0, limit=100)
+page2 = instagram_dataset_fetch(dataset_id=result["dataset_id"], offset=page1["next_offset"], limit=100)
 ```
+
 
 ## Environment Variables
 
@@ -118,10 +126,18 @@ instagram_scrape(
 - `POKE_API_KEY`: API key for SMS notifications (includes image URLs when R2 is configured)
 - `NOTIFY_URL`: Webhook URL for notifications (defaults to `https://poke.com/api/v1/inbound-sms/webhook`)
 
+**Server behavior:**
+- `MCP_SCRAPE_ITEMS_MAX`: Max number of scraped items returned inline from `instagram_scrape` (default: 50). Use `instagram_dataset_fetch` to page the rest.
+
 ## MCP Tools
 
 ### Instagram Scraping
 - `instagram_scrape(direct_urls?: string[], results_limit?: number=200, results_type?: string="posts", add_parent_data?: boolean=false, enhance_user_search_with_facebook_page?: boolean=false, is_user_reel_feed_url?: boolean=false, is_user_tagged_feed_url?: boolean=false, search_type?: string, search_query?: string, search_limit?: number=1, proxy_country?: string)`
+  - Returns a small sample of items plus `dataset_id` to avoid oversized payloads.
+  - Use `instagram_dataset_fetch(dataset_id, offset?, limit?)` to page through all items.
+
+- `instagram_dataset_fetch(dataset_id: string, offset?: number=0, limit?: number=100)`
+  - Fetch paginated items from a dataset produced by `instagram_scrape`.
 
 Example matching Apify input:
 ```json
