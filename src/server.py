@@ -264,6 +264,64 @@ def _kb_extract_text(item: Dict[str, Any]) -> str:
         return ""
 
 
+def _kb_check_existing_data(direct_urls: List[str], max_age_hours: int = 24) -> Dict[str, Any]:
+    """Check knowledge base for existing data before scraping."""
+    try:
+        conn = _kb_connect()
+        _kb_init(conn)
+        cur = conn.cursor()
+
+        # Convert URLs to consistent format for matching
+        normalized_urls = []
+        for url in direct_urls:
+            if url.startswith(("http://", "https://")):
+                normalized_urls.append(url)
+            else:
+                # Convert username to Instagram URL
+                clean = url.lstrip('@').strip()
+                if clean:
+                    normalized_urls.append(f"https://www.instagram.com/{clean}/")
+
+        # Check for existing data
+        existing_items = []
+        missing_urls = []
+
+        cutoff_time = (datetime.now(timezone.utc) - timedelta(hours=max_age_hours)).isoformat()
+
+        for url in normalized_urls:
+            cur.execute("""
+                SELECT COUNT(*) as count, MAX(kb_items.created_at) as last_scraped
+                FROM kb_items
+                JOIN kb_runs ON kb_items.run_id = kb_runs.id
+                WHERE kb_items.url = ? AND kb_items.created_at > ?
+            """, (url, cutoff_time))
+
+            result = cur.fetchone()
+            count = result[0] if result else 0
+            last_scraped = result[1] if result else None
+
+            if count > 0:
+                existing_items.append({
+                    "url": url,
+                    "item_count": count,
+                    "last_scraped": last_scraped
+                })
+            else:
+                missing_urls.append(url)
+
+        conn.close()
+
+        return {
+            "has_existing_data": len(existing_items) > 0,
+            "existing_items": existing_items,
+            "missing_urls": missing_urls,
+            "total_urls_checked": len(normalized_urls),
+            "max_age_hours": max_age_hours
+        }
+    except Exception as e:
+        return {"error": str(e), "has_existing_data": False}
+
+
 def _kb_extract_url(item: Dict[str, Any]) -> Optional[str]:
     for k in ("url", "link", "permalink", "shortcode", "shortCode"):
         v = item.get(k)
@@ -396,12 +454,28 @@ def kb_recent_runs(limit: int = 10) -> Dict[str, Any]:
 
 @mcp.tool(
     description=(
+        "Check knowledge base for existing Instagram data before scraping. "
+        "Accepts usernames or URLs and returns information about what data already exists "
+        "and what URLs need to be scraped. Use this to decide whether to call instagram_scrape."
+    )
+)
+def kb_check_instagram_data(
+    direct_urls: List[str],
+    max_age_hours: int = 24,
+) -> Dict[str, Any]:
+    """Check knowledge base for existing Instagram data before scraping."""
+    return _kb_check_existing_data(direct_urls, max_age_hours)
+
+
+@mcp.tool(
+    description=(
         "Scrape Instagram via Apify instagram-scraper. "
         "Accepts usernames (automatically converted to URLs), profile URLs, or post URLs. "
         "Plain usernames like 'kugie.app' are automatically converted to 'https://www.instagram.com/kugie.app/'. "
         "Can scrape profiles, posts, or specific content based on the URLs provided. "
         "Sends a completion notification after scraping."
         "Returns all scraped items in the response for further processing by other tools/agents."
+        "Optimized to check knowledge base first and only scrape for missing or outdated information."
     )
 )
 def instagram_scrape(
@@ -416,6 +490,8 @@ def instagram_scrape(
     search_query: Optional[str] = None,
     search_limit: int = 1,
     proxy_country: Optional[str] = None,
+    force_scrape: bool = False,
+    max_age_hours: int = 24,
 ) -> Dict[str, Any]:
     try:
         # Validate input: either direct URLs (or usernames to convert), or search parameters
@@ -423,6 +499,19 @@ def instagram_scrape(
         has_search = bool(search_type and search_query)
         if not (has_direct or has_search):
             raise ValueError("Provide either direct_urls (usernames or URLs) or both search_type and search_query")
+
+        # Check knowledge base first for direct URLs (unless force_scrape is True)
+        kb_check_result = None
+        if has_direct and not force_scrape:
+            kb_check_result = _kb_check_existing_data(direct_urls, max_age_hours)
+            if kb_check_result.get("has_existing_data") and not kb_check_result.get("missing_urls"):
+                # All URLs have recent data in knowledge base
+                return {
+                    "status": "SKIPPED",
+                    "reason": "All requested URLs have recent data in knowledge base",
+                    "knowledge_base_check": kb_check_result,
+                    "max_age_hours": max_age_hours
+                }
 
         token = _env("APIFY_TOKEN")
         if not token:
@@ -434,7 +523,10 @@ def instagram_scrape(
         processed_direct_urls: List[str] = []
         conversions: List[str] = []
         if has_direct:
-            for u in direct_urls or []:
+            # If we have knowledge base results, only process missing URLs
+            urls_to_process = kb_check_result.get("missing_urls", []) if kb_check_result else (direct_urls or [])
+
+            for u in urls_to_process:
                 if isinstance(u, str) and u.startswith(("http://", "https://")):
                     processed_direct_urls.append(u)
                 else:
@@ -540,6 +632,13 @@ def instagram_scrape(
                 "started_at": run.get("startedAt"),
                 "finished_at": run.get("FinishedAt") or run.get("finishedAt"),
                 "usage": run.get("usage", {})
+            },
+            "knowledge_base_check": kb_check_result,
+            "optimization_info": {
+                "force_scrape": force_scrape,
+                "max_age_hours": max_age_hours,
+                "skipped_urls": len(kb_check_result.get("existing_items", [])) if kb_check_result else 0,
+                "scraped_urls": len(processed_direct_urls)
             }
         }
     except Exception as e:
