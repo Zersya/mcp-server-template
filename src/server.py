@@ -2,7 +2,6 @@
 import os
 import json
 import uuid
-import asyncio
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from fastmcp import FastMCP
@@ -33,11 +32,6 @@ except Exception:  # library may not be installed yet
     boto3 = None  # type: ignore
     ClientError = Exception  # type: ignore
     NoCredentialsError = Exception  # type: ignore
-
-try:
-    import aiohttp
-except Exception:  # library may not be installed yet
-    aiohttp = None  # type: ignore
 
 
 
@@ -86,51 +80,6 @@ def notify_status(message: str, image_urls: Optional[List[str]] = None, expires_
             "message": enhanced_message,
             "image_urls_included": len(image_urls) if image_urls else 0
         }
-    except Exception as e:
-        return {"sent": False, "error": str(e), "message": enhanced_message}
-
-
-async def notify_status_async(message: str, image_urls: Optional[List[str]] = None, expires_hours: Optional[int] = None) -> Dict[str, Any]:
-    """Async version of notify_status using aiohttp."""
-    if not aiohttp:
-        # Fall back to sync version if aiohttp is not available
-        return await asyncio.to_thread(notify_status, message, image_urls, expires_hours)
-
-    api_key = _env("POKE_API_KEY") or _env("NOTIFY_API_KEY")
-    url = _env("NOTIFY_URL", "https://poke.com/api/v1/inbound-sms/webhook")
-    if not api_key:
-        return {"sent": False, "reason": "No API key configured", "message": message}
-
-    # Enhance message with image URLs if provided
-    enhanced_message = message
-    if image_urls:
-        url_text = ", ".join(image_urls[:3])  # Limit to 3 URLs for SMS length
-        if len(image_urls) > 3:
-            url_text += f" (+{len(image_urls) - 3} more)"
-
-        expiry_text = ""
-        if expires_hours:
-            expiry_text = f" - expires in {expires_hours}h"
-
-        enhanced_message = f"{message}\nImages: {url_text}{expiry_text}"
-
-    try:
-        timeout = aiohttp.ClientTimeout(total=15)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                url,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                json={"message": enhanced_message}
-            ) as resp:
-                return {
-                    "sent": resp.ok,
-                    "status_code": resp.status,
-                    "message": enhanced_message,
-                    "image_urls_included": len(image_urls) if image_urls else 0
-                }
     except Exception as e:
         return {"sent": False, "error": str(e), "message": enhanced_message}
 
@@ -406,122 +355,6 @@ def _late_api_request(
                 time.sleep(wait_time)
                 continue
             raise RuntimeError(f"Network error connecting to Late.dev API: {e}")
-
-    # If we get here, all retries failed
-    if last_error:
-        raise RuntimeError(f"Failed to connect to Late.dev API after {max_retries + 1} attempts: {last_error}")
-    else:
-        raise RuntimeError(f"Failed to connect to Late.dev API after {max_retries + 1} attempts")
-
-
-async def _late_api_request_async(
-    method: str,
-    endpoint: str,
-    api_key: str,
-    json_data: Optional[Dict] = None,
-    max_retries: int = 0,
-    total_timeout: Optional[float] = None,
-    connect_timeout: Optional[float] = None,
-    read_timeout: Optional[float] = None
-) -> Dict[str, Any]:
-    """Make an async request to Late.dev API with retry logic and better error handling."""
-    if not aiohttp:
-        raise RuntimeError("aiohttp is required for async requests but is not installed")
-
-    # Configure timeouts from environment variables or use defaults
-    if total_timeout is None:
-        total_timeout = float(_env("MCP_HTTP_TOTAL_TIMEOUT", "600"))  # 10 minutes for scraping
-    if connect_timeout is None:
-        connect_timeout = float(_env("MCP_HTTP_CONNECT_TIMEOUT", "30"))  # 30 seconds
-    if read_timeout is None:
-        read_timeout = float(_env("MCP_HTTP_READ_TIMEOUT", "120"))  # 2 minutes
-
-    timeout = aiohttp.ClientTimeout(
-        total=total_timeout,
-        connect=connect_timeout,
-        sock_read=read_timeout
-    )
-
-    url = f"https://getlate.dev/api/v1{endpoint}"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-
-    last_error = None
-
-    for attempt in range(max_retries + 1):
-        try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.request(
-                    method=method,
-                    url=url,
-                    headers=headers,
-                    json=json_data
-                ) as response:
-
-                    # Handle 500 errors with retries
-                    if response.status >= 500:
-                        if attempt < max_retries:
-                            wait_time = 2 ** attempt  # Exponential backoff
-                            await asyncio.sleep(wait_time)
-                            continue
-
-                        # Last attempt failed, try to extract error info
-                        try:
-                            error_data = await response.json()
-                            error_msg = error_data.get("error") or error_data.get("message") or str(error_data)
-                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
-                            error_text = await response.text()
-                            error_msg = error_text[:200]
-
-                        raise RuntimeError(f"Late.dev server error (attempt {attempt + 1}): {error_msg}")
-
-                    # Handle other HTTP errors
-                    if not response.ok:
-                        error_msg = f"Late.dev API error: HTTP {response.status}"
-                        try:
-                            error_data = await response.json()
-                            if "error" in error_data:
-                                error_msg += f" - {error_data['error']}"
-                            elif "message" in error_data:
-                                error_msg += f" - {error_data['message']}"
-                            elif isinstance(error_data, dict):
-                                error_msg += f" - {str(error_data)}"
-                        except (aiohttp.ContentTypeError, json.JSONDecodeError):
-                            error_text = await response.text()
-                            error_msg += f" - {error_text[:200]}"
-
-                        # Add specific guidance
-                        if response.status == 401:
-                            error_msg += " (Invalid Late.dev API key)"
-                        elif response.status == 403:
-                            error_msg += " (Access forbidden - check permissions)"
-
-                        raise RuntimeError(error_msg)
-
-                    # Try to parse JSON response
-                    try:
-                        return await response.json()
-                    except (aiohttp.ContentTypeError, json.JSONDecodeError) as e:
-                        raise RuntimeError(f"Invalid JSON response from Late.dev API: {e}")
-
-        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
-            last_error = e
-            if attempt < max_retries:
-                wait_time = 2 ** attempt
-                await asyncio.sleep(wait_time)
-                continue
-
-            # Provide specific error messages for timeout scenarios
-            if isinstance(e, asyncio.TimeoutError):
-                raise RuntimeError(f"Request timed out after {total_timeout}s (total timeout). Try increasing MCP_HTTP_TOTAL_TIMEOUT environment variable.")
-            elif isinstance(e, aiohttp.ServerTimeoutError):
-                raise RuntimeError(f"Server timeout error: {e}. Try increasing timeout values or check server status.")
-            elif isinstance(e, aiohttp.ClientConnectorError):
-                raise RuntimeError(f"Connection error: {e}. Check network connectivity and API endpoint.")
-            else:
-                raise RuntimeError(f"Network error connecting to Late.dev API: {e}")
 
     # If we get here, all retries failed
     if last_error:
@@ -871,7 +704,7 @@ def kb_check_instagram_data(
         "Requires Late.dev API key configuration."
     )
 )
-async def instagram_get_accounts() -> Dict[str, Any]:
+def instagram_get_accounts() -> Dict[str, Any]:
     """Get connected Instagram accounts from Late.dev API."""
     try:
         # Validate API key
@@ -880,7 +713,7 @@ async def instagram_get_accounts() -> Dict[str, Any]:
             raise RuntimeError("LATE_DEV_API_KEY not configured")
 
         # Make API request with retry logic
-        accounts_data = await _late_api_request_async("GET", "/accounts", api_key)
+        accounts_data = _late_api_request("GET", "/accounts", api_key)
 
         # Check if response is in expected format
         if not isinstance(accounts_data, list):
@@ -945,7 +778,7 @@ async def instagram_get_accounts() -> Dict[str, Any]:
         "Optimized to check knowledge base first and only scrape for missing or outdated information."
     )
 )
-async def instagram_scrape(
+def instagram_scrape(
     direct_urls: Optional[List[str]] = None,
     results_limit: int = 200,
     results_type: str = "posts",
@@ -984,7 +817,7 @@ async def instagram_scrape(
         # Check knowledge base first for direct URLs (unless force_scrape is True)
         kb_check_result = None
         if has_direct and not force_scrape:
-            kb_check_result = await asyncio.to_thread(_kb_check_existing_data, direct_urls, max_age_hours)
+            kb_check_result = _kb_check_existing_data(direct_urls, max_age_hours)
             if kb_check_result.get("has_existing_data") and not kb_check_result.get("missing_urls"):
                 # All URLs have recent data in knowledge base
                 return {
@@ -1045,7 +878,7 @@ async def instagram_scrape(
                 "apifyProxyCountry": proxy_country,
             }
 
-        run = await asyncio.to_thread(client.actor("apify/instagram-scraper").call, run_input=run_input)
+        run = client.actor("apify/instagram-scraper").call(run_input=run_input)
 
         # Check if run was successful
         if not run:
@@ -1065,21 +898,12 @@ async def instagram_scrape(
         items: List[Dict[str, Any]] = []
         truncated = False
         max_items = int((_env("MCP_SCRAPE_ITEMS_MAX", "50") or "50"))
-
-        def _fetch_dataset_items():
-            """Helper function to fetch dataset items in a thread."""
-            items_list = []
-            try:
-                for item in client.dataset(dataset_id).iterate_items():
-                    items_list.append(item)
-                    if len(items_list) >= max_items:
-                        return items_list, True  # truncated = True
-                return items_list, False  # truncated = False
-            except Exception as dataset_error:
-                raise RuntimeError(f"Failed to retrieve dataset items: {dataset_error}")
-
         try:
-            items, truncated = await asyncio.to_thread(_fetch_dataset_items)
+            for item in client.dataset(dataset_id).iterate_items():
+                items.append(item)
+                if len(items) >= max_items:
+                    truncated = True
+                    break
         except Exception as dataset_error:
             raise RuntimeError(f"Failed to retrieve dataset items: {dataset_error}")
 
@@ -1090,7 +914,7 @@ async def instagram_scrape(
             error_message = run.get("statusMessage", "Unknown error")
             raise RuntimeError(f"Apify actor run {status}: {error_message}")
 
-        notify = await notify_status_async(f"Instagram scraping {status.lower()}: {len(items)} items")
+        notify = notify_status(f"Instagram scraping {status.lower()}: {len(items)} items")
 
         return {
             "status": status,
@@ -1132,7 +956,7 @@ async def instagram_scrape(
             }
         }
     except Exception as e:
-        await notify_status_async(f"Instagram scraping failed: {e}")
+        notify_status(f"Instagram scraping failed: {e}")
         return {"error": str(e)}
 
 
@@ -1356,9 +1180,9 @@ def image_generate_ideogram(
     prompt: str,
     platform: str = "instagram",
     content_type: str = "post",
-    style_type: str = "Auto",
+    style_type: str = "AUTO",
     aspect_ratio: Optional[str] = None,
-    magic_prompt_option: str = "Auto",
+    magic_prompt_option: str = "AUTO",
     negative_prompt: Optional[str] = None,
     brand_colors: Optional[str] = None,
     text_overlay: Optional[str] = None,
@@ -1387,7 +1211,7 @@ def image_generate_ideogram(
         if content_type not in valid_content_types:
             raise ValueError(f"content_type must be one of: {', '.join(valid_content_types)}")
 
-        valid_styles = ["None", "Auto", "General", "Realistic", "Design"]
+        valid_styles = ["AUTO", "REALISTIC", "ANIME", "RENDER_3D", "CINEMATIC"]
         if style_type not in valid_styles:
             raise ValueError(f"style_type must be one of: {', '.join(valid_styles)}")
 
@@ -1403,7 +1227,7 @@ def image_generate_ideogram(
         if aspect_ratio not in valid_ratios:
             raise ValueError(f"aspect_ratio must be one of: {', '.join(valid_ratios)}")
 
-        valid_magic_prompts = ["Auto", "On", "Off"]
+        valid_magic_prompts = ["AUTO", "ON", "OFF"]
         if magic_prompt_option not in valid_magic_prompts:
             raise ValueError(f"magic_prompt_option must be one of: {', '.join(valid_magic_prompts)}")
 
@@ -1986,7 +1810,7 @@ def _get_template_use_case(template_name: str) -> str:
         "Use instagram_get_accounts() to find your instagram_account_id."
     )
 )
-async def instagram_post_schedule(
+def instagram_post_schedule(
     content: str,
     instagram_account_id: str,
     image_source: Optional[str] = None,
@@ -2135,7 +1959,7 @@ async def instagram_post_schedule(
             pass
 
         # Make API request to Late.dev with retry logic
-        result_data = await _late_api_request_async("POST", "/posts", api_key, payload)
+        result_data = _late_api_request("POST", "/posts", api_key, payload)
 
         # Extract post information
         post_info = {
@@ -2167,13 +1991,13 @@ async def instagram_post_schedule(
             notify_message += f"\nPost: {post_url}"
 
         notify_urls = [post_url] if post_url else []
-        notify = await notify_status_async(notify_message, notify_urls)
+        notify = notify_status(notify_message, notify_urls)
         post_info["notification"] = notify
 
         return post_info
 
     except Exception as e:
-        await notify_status_async(f"Instagram post scheduling failed: {e}")
+        notify_status(f"Instagram post scheduling failed: {e}")
         return {"error": str(e)}
 
 
