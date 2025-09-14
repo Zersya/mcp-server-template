@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from fastmcp import FastMCP
 from typing import List, Optional, Dict, Any, Union
 import requests
+import sqlite3
+
 
 try:
     from apify_client import ApifyClient
@@ -207,6 +209,189 @@ def _upload_to_r2(local_path: str, folder: str, filename: str) -> Dict[str, Any]
         return {"success": False, "error": f"R2 upload failed: {e}"}
     except Exception as e:
         return {"success": False, "error": f"Upload error: {e}"}
+
+# -------------------- SQLite Knowledge Base (Scrape Memory) --------------------
+
+def _kb_db_path() -> Path:
+    d = Path("data"); d.mkdir(exist_ok=True)
+    return d / "scrape_kb.sqlite3"
+
+
+def _kb_connect():
+    conn = sqlite3.connect(str(_kb_db_path()))
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    return conn
+
+
+def _kb_init(conn) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kb_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            dataset_id TEXT,
+            tag TEXT,
+            source TEXT,
+            run_info_json TEXT,
+            created_at TEXT
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS kb_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER REFERENCES kb_runs(id) ON DELETE CASCADE,
+            item_json TEXT,
+            text TEXT,
+            url TEXT,
+            created_at TEXT,
+            UNIQUE(run_id, url)
+        )
+        """
+    )
+    conn.commit()
+
+
+def _kb_extract_text(item: Dict[str, Any]) -> str:
+    for k in ("caption", "alt", "description", "title", "text"):
+        v = item.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    try:
+        return item.get("edge_media_to_caption", {}).get("edges", [{}])[0].get("node", {}).get("text", "")
+    except Exception:
+        return ""
+
+
+def _kb_extract_url(item: Dict[str, Any]) -> Optional[str]:
+    for k in ("url", "link", "permalink", "shortcode", "shortCode"):
+        v = item.get(k)
+        if isinstance(v, str) and v:
+            return f"https://www.instagram.com/p/{v}/" if k in ("shortcode", "shortCode") else v
+    return None
+
+
+@mcp.tool(
+    description=(
+        "Save scrape results into a local SQLite knowledge base. "
+        "Provide dataset_id and items (from instagram_scrape or instagram_dataset_fetch). "
+        "Optionally include tag, source, and run_info."
+    )
+)
+def kb_save_scrape(
+    dataset_id: str,
+    items: List[Dict[str, Any]],
+    tag: Optional[str] = None,
+    source: Optional[str] = None,
+    run_info: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    try:
+        if not dataset_id:
+            raise ValueError("dataset_id is required")
+        if not isinstance(items, list):
+            raise ValueError("items must be a list of objects")
+        conn = _kb_connect(); _kb_init(conn)
+        cur = conn.cursor(); now = datetime.now(timezone.utc).isoformat()
+        cur.execute(
+            "INSERT INTO kb_runs(dataset_id, tag, source, run_info_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (dataset_id, tag, source, json.dumps(run_info or {}), now),
+        )
+        run_id = cur.lastrowid
+        inserted = 0; skipped = 0
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            text = _kb_extract_text(it); url = _kb_extract_url(it)
+            try:
+                cur.execute(
+                    "INSERT OR IGNORE INTO kb_items(run_id, item_json, text, url, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (run_id, json.dumps(it), text, url, now),
+                )
+                (inserted := inserted + 1) if cur.rowcount else (skipped := skipped + 1)
+            except Exception:
+                skipped += 1
+        conn.commit()
+        return {
+            "success": True,
+            "run_id": run_id,
+            "dataset_id": dataset_id,
+            "inserted": inserted,
+            "skipped": skipped,
+            "tag": tag,
+            "source": source,
+            "created_at": now,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+@mcp.tool(
+    description=(
+        "Search the local scrape knowledge base. "
+        "Filter by keyword (caption/description), dataset_id or tag."
+    )
+)
+def kb_search(
+    query: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+    tag: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    try:
+        conn = _kb_connect(); _kb_init(conn); cur = conn.cursor()
+        where = []; params: List[Any] = []
+        if query:
+            where.append("kb_items.text LIKE ?"); params.append(f"%{query}%")
+        if dataset_id:
+            where.append("kb_runs.dataset_id = ?"); params.append(dataset_id)
+        if tag:
+            where.append("kb_runs.tag = ?"); params.append(tag)
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        sql = f"""
+            SELECT kb_items.id, kb_items.url, kb_items.text, kb_items.created_at,
+                   kb_runs.id as run_id, kb_runs.dataset_id, kb_runs.tag
+            FROM kb_items
+            JOIN kb_runs ON kb_items.run_id = kb_runs.id
+            {where_sql}
+            ORDER BY kb_items.id DESC
+            LIMIT ? OFFSET ?
+        """
+        params.extend([int(limit), int(offset)])
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+        results = [
+            {
+                "item_id": r[0], "url": r[1], "text": r[2], "created_at": r[3],
+                "run_id": r[4], "dataset_id": r[5], "tag": r[6]
+            }
+            for r in rows
+        ]
+        return {
+            "count": len(results), "items": results, "query": query,
+            "dataset_id": dataset_id, "tag": tag, "limit": limit, "offset": offset
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@mcp.tool(description="List recent scrape runs stored in the SQLite knowledge base.")
+def kb_recent_runs(limit: int = 10) -> Dict[str, Any]:
+    try:
+        conn = _kb_connect(); _kb_init(conn); cur = conn.cursor()
+        cur.execute(
+            "SELECT id, dataset_id, tag, source, created_at FROM kb_runs ORDER BY id DESC LIMIT ?",
+            (int(limit),),
+        )
+        rows = cur.fetchall()
+        runs = [
+            {"run_id": r[0], "dataset_id": r[1], "tag": r[2], "source": r[3], "created_at": r[4]}
+            for r in rows
+        ]
+        return {"count": len(runs), "runs": runs}
+    except Exception as e:
+        return {"error": str(e)}
 
 
 @mcp.tool(
