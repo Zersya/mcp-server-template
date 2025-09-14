@@ -129,6 +129,11 @@ page2 = instagram_dataset_fetch(dataset_id=result["dataset_id"], offset=page1["n
 **Server behavior:**
 - `MCP_SCRAPE_ITEMS_MAX`: Max number of scraped items returned inline from `instagram_scrape` (default: 50). Use `instagram_dataset_fetch` to page the rest.
 
+**HTTP Timeout Configuration:**
+- `MCP_HTTP_TOTAL_TIMEOUT`: Total timeout for HTTP requests in seconds (default: 600 for scraping operations)
+- `MCP_HTTP_CONNECT_TIMEOUT`: Connection establishment timeout in seconds (default: 30)
+- `MCP_HTTP_READ_TIMEOUT`: Socket read timeout in seconds (default: 120)
+
 ## MCP Tools
 
 ### Instagram Scraping
