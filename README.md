@@ -49,7 +49,7 @@ Your server will be available at `https://your-service-name.onrender.com/mcp` (N
 This server includes MCP tools for Instagram scraping, image fetching, and AI-powered image editing.
 
 ### Instagram Scraping (Apify)
-Uses Apify's `instagram-scraper` to collect Instagram content.
+Uses Apify's `instagram-scraper` to collect Instagram content from usernames, profile URLs, or specific post URLs.
 
 ### Image Fetching (Unsplash)
 Search and download free-to-use images from Unsplash's extensive collection.
@@ -60,12 +60,29 @@ Edit images using AI models via Replicate's `google/nano-banana` model.
 ### Cloud Storage (Cloudflare R2)
 Automatically upload all images to Cloudflare R2 storage with public URLs and time-limited access.
 
+### Instagram Posting (Late.dev)
+Schedule and publish Instagram posts using the Late.dev API with images from Unsplash, AI-edited images, or external URLs.
+
+## Workflow Examples
+
+### Complete Instagram Content Pipeline
+1. **Fetch Images**: Use `image_fetch_unsplash()` to download royalty-free images
+2. **Edit Images**: Use `image_edit_replicate()` to enhance images with AI
+3. **Post to Instagram**: Use `instagram_post_schedule()` with R2 URLs from previous steps
+4. **Get Notifications**: Receive SMS notifications with post URLs and image links
+
+### Instagram Research & Posting
+1. **Research Content**: Use `instagram_scrape()` to analyze competitor posts
+2. **Create Content**: Use `image_fetch_unsplash()` and `image_edit_replicate()` for visuals
+3. **Schedule Posts**: Use `instagram_post_schedule()` to publish at optimal times
+
 ## Environment Variables
 
 **Required:**
 - `APIFY_TOKEN`: Apify API token for Instagram scraping
 - `UNSPLASH_ACCESS_KEY`: Unsplash API access key for image fetching
 - `REPLICATE_API_TOKEN`: Replicate API token for image editing
+- `LATE_DEV_API_KEY`: Late.dev API key for Instagram posting
 
 **Cloudflare R2 Storage (Optional but Recommended):**
 - `CLOUDFLARE_R2_ACCOUNT_ID`: Cloudflare account ID
@@ -73,6 +90,7 @@ Automatically upload all images to Cloudflare R2 storage with public URLs and ti
 - `CLOUDFLARE_R2_SECRET_ACCESS_KEY`: R2 secret key
 - `CLOUDFLARE_R2_BUCKET_NAME`: Target bucket name
 - `CLOUDFLARE_R2_PUBLIC_DOMAIN`: Custom domain for public URLs (optional)
+- `CLOUDFLARE_R2_PUBLIC_SUBDOMAIN`: R2 public subdomain (e.g., "pub-4c735be9ea544be589c605db1cbddec0") (optional)
 
 **Notifications:**
 - `POKE_API_KEY`: API key for SMS notifications (includes image URLs when R2 is configured)
@@ -81,11 +99,20 @@ Automatically upload all images to Cloudflare R2 storage with public URLs and ti
 ## MCP Tools
 
 ### Instagram Scraping
-- `instagram_scrape(usernames?: string[], hashtags?: string[], search?: string, results_limit?: number=50, proxy_country?: string)`
+- `instagram_scrape(username: string[], results_limit?: number=30, proxy_country?: string)`
 
 ### Image Operations
 - `image_fetch_unsplash(query: string, count?: number=5, orientation?: string, color?: string, download_images?: boolean=true)`
 - `image_edit_replicate(image_input: string, prompt: string, additional_images?: string[], save_locally?: boolean=true)`
+
+### Instagram Posting
+- `instagram_post_schedule(content: string, image_source: string, instagram_account_id: string, schedule_time?: string, timezone?: string="UTC", publish_now?: boolean=false, content_type?: string="post", collaborators?: string[])`
+
+### Cloud Storage Setup
+- `cloudflare_r2_public_setup()`: Configure R2 bucket for public access and troubleshoot URL authorization errors
+
+### Cloud Storage Troubleshooting
+- `r2_troubleshoot_access()`: Diagnose and fix R2 public access issues, including "InvalidArgument Authorization" errors
 
 ## Features
 
@@ -116,6 +143,25 @@ When both R2 storage and SMS notifications are configured:
 - Receive instant notifications with public image URLs
 - URLs are included in SMS messages with expiration info
 - Format: `"Operation completed - Images: [URL] - expires in 24h"`
+
+## Troubleshooting R2 Access Issues
+
+### "InvalidArgument Authorization" Error
+If you get this error when accessing image URLs via WhatsApp or other apps:
+
+1. **Use the troubleshooting tool:**
+   ```
+   Call r2_troubleshoot_access() to diagnose the issue
+   ```
+
+2. **Quick fix:** Enable public access on your R2 bucket:
+   - Go to Cloudflare Dashboard → R2 → Your Bucket → Settings
+   - Enable "Allow Access" under Public URL Access
+
+3. **Best solution:** Set up a custom domain for reliable public access:
+   - Go to Cloudflare Dashboard → R2 → Your Bucket
+   - Click "Connect Domain" and configure a custom domain
+   - Set `CLOUDFLARE_R2_PUBLIC_DOMAIN` environment variable
 
 Setup dependencies:
 ```bash

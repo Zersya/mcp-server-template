@@ -212,21 +212,21 @@ def _upload_to_r2(local_path: str, folder: str, filename: str) -> Dict[str, Any]
 @mcp.tool(
     description=(
         "Scrape Instagram via Apify instagram-scraper. "
-        "Always asks to users which input to use, for example usernames or hastags or search and which proxy country to use."
+        "Accepts usernames, profile URLs, or post URLs in the username array. "
+        "Can scrape profiles, posts, or specific content based on the URLs provided. "
         "Sends a completion notification after scraping."
         "Returns all scraped items in the response for further processing by other tools/agents."
     )
 )
 def instagram_scrape(
-    usernames: Optional[List[str]] = None,
-    hashtags: Optional[List[str]] = None,
-    search: Optional[str] = None,
-    results_limit: int = 50,
+    username: List[str],
+    results_limit: int = 30,
     proxy_country: Optional[str] = None,
 ) -> Dict[str, Any]:
     try:
-        if not any([usernames, hashtags, search]):
-            raise ValueError("Provide at least one of usernames, hashtags, or search")
+        if not username or len(username) == 0:
+            raise ValueError("Provide at least one username, profile URL, or post URL")
+
         token = _env("APIFY_TOKEN")
         if not token:
             raise RuntimeError("APIFY_TOKEN not configured")
@@ -234,15 +234,12 @@ def instagram_scrape(
             raise RuntimeError("apify-client is not installed")
 
         client = ApifyClient(token)
-        run_input: Dict[str, Any] = {}
-        if usernames:
-            run_input["usernames"] = usernames
-        if hashtags:
-            run_input["hashtags"] = hashtags
-        if search:
-            run_input["search"] = search
-        if results_limit:
-            run_input["resultsLimit"] = int(results_limit)
+        run_input: Dict[str, Any] = {
+            "username": username,
+            "resultsLimit": results_limit
+        }
+
+        # Add proxy configuration if specified
         if proxy_country:
             run_input["proxy"] = {
                 "useApifyProxy": True,
@@ -573,6 +570,203 @@ def image_edit_replicate(
 
     except Exception as e:
         notify_status(f"Image editing failed: {e}")
+        return {"error": str(e)}
+
+
+def _extract_image_url_from_tool_response(tool_response: Dict[str, Any]) -> Optional[str]:
+    """Extract the best image URL from responses from image_fetch_unsplash or image_edit_replicate."""
+    if not isinstance(tool_response, dict):
+        return None
+
+    # For image_edit_replicate responses
+    if "public_url" in tool_response:
+        return tool_response["public_url"]
+
+    # For image_fetch_unsplash responses
+    if "images" in tool_response and isinstance(tool_response["images"], list):
+        for image in tool_response["images"]:
+            if isinstance(image, dict) and "public_url" in image:
+                return image["public_url"]
+
+    return None
+
+
+@mcp.tool(
+    description=(
+        "Schedule Instagram posts using Late.dev API. "
+        "Supports posting images from local files, R2 storage URLs, or external URLs. "
+        "Can schedule posts for later or publish immediately. "
+        "Requires Instagram Business account and Late.dev API key. "
+        "Sends notification with post URL after successful scheduling. "
+        "For best results, use R2 URLs from image_fetch_unsplash or image_edit_replicate tools."
+    )
+)
+def instagram_post_schedule(
+    content: str,
+    image_source: str,
+    instagram_account_id: str,
+    schedule_time: Optional[str] = None,
+    timezone: str = "UTC",
+    publish_now: bool = False,
+    content_type: str = "post",
+    collaborators: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """Schedule Instagram posts via Late.dev API with image support."""
+    try:
+        # Validate API key
+        api_key = _env("LATE_DEV_API_KEY")
+        if not api_key:
+            raise RuntimeError("LATE_DEV_API_KEY not configured")
+
+        # Validate required parameters
+        if not content.strip():
+            raise ValueError("Content cannot be empty")
+
+        if not instagram_account_id.strip():
+            raise ValueError("Instagram account ID is required")
+
+        # Process image source
+        image_url = None
+        local_file_info = None
+
+        if image_source:
+            if image_source.startswith(("http://", "https://")):
+                # External URL (including R2 URLs)
+                image_url = image_source
+            else:
+                # Local file path - try to upload to R2 first
+                image_path = Path(image_source)
+                if not image_path.exists():
+                    # Try images directory
+                    image_path = Path("images") / image_source
+
+                if not image_path.exists():
+                    raise FileNotFoundError(f"Image file not found: {image_source}")
+
+                # Upload to R2 for better reliability
+                filename = image_path.name
+                r2_result = _upload_to_r2(str(image_path), "instagram", filename)
+
+                if r2_result["success"]:
+                    image_url = r2_result["public_url"]
+                    local_file_info = {
+                        "local_path": str(image_path),
+                        "r2_key": r2_result["r2_key"],
+                        "r2_url": r2_result["r2_url"],
+                        "expires_at": r2_result["expires_at"]
+                    }
+                else:
+                    # Fallback: provide guidance for manual URL usage
+                    raise ValueError(
+                        f"Failed to upload image to R2: {r2_result['error']}. "
+                        "Please use image_fetch_unsplash or image_edit_replicate tools "
+                        "which automatically provide R2 URLs, or provide a direct image URL."
+                    )
+
+        # Build Late.dev API request
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+
+        # Build platform-specific data
+        platform_data = {
+            "platform": "instagram",
+            "accountId": instagram_account_id
+        }
+
+        # Add platform-specific options
+        if content_type == "story":
+            platform_data["platformSpecificData"] = {"contentType": "story"}
+        elif collaborators:
+            platform_data["platformSpecificData"] = {"collaborators": collaborators}
+
+        # Build request payload
+        payload = {
+            "content": content,
+            "platforms": [platform_data]
+        }
+
+        # Add media if image provided
+        if image_url:
+            payload["mediaItems"] = [
+                {
+                    "type": "image",
+                    "url": image_url
+                }
+            ]
+
+        # Handle scheduling
+        if not publish_now and schedule_time:
+            payload["scheduledFor"] = schedule_time
+            payload["timezone"] = timezone
+        elif publish_now:
+            # For immediate posting, don't include scheduledFor
+            pass
+
+        # Make API request to Late.dev
+        response = requests.post(
+            "https://getlate.dev/api/v1/posts",
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+
+        if not response.ok:
+            error_msg = f"Late.dev API error: HTTP {response.status_code}"
+            try:
+                error_data = response.json()
+                if "error" in error_data:
+                    error_msg += f" - {error_data['error']}"
+            except:
+                error_msg += f" - {response.text}"
+
+            # Handle specific Instagram errors
+            if response.status_code == 403:
+                error_msg += " (Check if Instagram account is Business type and properly connected)"
+            elif response.status_code == 401:
+                error_msg += " (Invalid Late.dev API key)"
+
+            raise RuntimeError(error_msg)
+
+        result_data = response.json()
+
+        # Extract post information
+        post_info = {
+            "success": True,
+            "content": content,
+            "image_url": image_url,
+            "instagram_account_id": instagram_account_id,
+            "content_type": content_type,
+            "scheduled": not publish_now,
+            "schedule_time": schedule_time if not publish_now else None,
+            "timezone": timezone,
+            "late_dev_response": result_data
+        }
+
+        # Add local file info if available
+        if local_file_info:
+            post_info["local_file_info"] = local_file_info
+
+        # Extract post URL if available
+        post_url = None
+        if "post" in result_data and "url" in result_data["post"]:
+            post_url = result_data["post"]["url"]
+            post_info["post_url"] = post_url
+
+        # Send notification
+        notify_message = f"Instagram post {'scheduled' if not publish_now else 'published'}: {content[:50]}..."
+        if post_url:
+            notify_message += f"\nPost: {post_url}"
+
+        notify_urls = [post_url] if post_url else []
+        notify = notify_status(notify_message, notify_urls)
+        post_info["notification"] = notify
+
+        return post_info
+
+    except Exception as e:
+        notify_status(f"Instagram post scheduling failed: {e}")
         return {"error": str(e)}
 
 
