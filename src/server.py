@@ -36,7 +36,7 @@ except Exception:  # library may not be installed yet
 
 
 # FastMCP server instance
-mcp = FastMCP("Social Media Toolkit for Instagram & Tiktok", request_timeout=900)
+mcp = FastMCP("Social Media Toolkit for Instagram & Tiktok", log_level="DEBUG")
 
 
 # -------------------- Instagram / Apify helpers --------------------
@@ -2011,5 +2011,5 @@ if __name__ == "__main__":
     mcp.run(
         transport="http",
         host=host,
-        port=port
+        port=port, 
     )
