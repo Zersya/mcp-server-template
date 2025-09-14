@@ -407,31 +407,43 @@ def _upload_to_r2(local_path: str, folder: str, filename: str) -> Dict[str, Any]
         with open(local_path, 'rb') as f:
             client.upload_fileobj(f, bucket_name, r2_key)
 
-        # Generate presigned URL (24 hours expiration)
-        expires_in = 24 * 60 * 60  # 24 hours in seconds
-        expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+        # --- REVISED LOGIC ---
+        public_url = ""
+        expires_at = None
+        expires_in_hours = None
+        custom_domain = _env("CLOUDFLARE_R2_PUBLIC_DOMAIN")
 
-        try:
-            public_url = client.generate_presigned_url(
-                'get_object',
-                Params={'Bucket': bucket_name, 'Key': r2_key},
-                ExpiresIn=expires_in
-            )
-        except Exception:
-            # Fallback to custom domain if available
-            custom_domain = _env("CLOUDFLARE_R2_PUBLIC_DOMAIN")
-            if custom_domain:
-                public_url = f"https://{custom_domain}/{r2_key}"
-            else:
-                public_url = f"https://{bucket_name}.r2.dev/{r2_key}"
+        # 1. Prioritize the custom public domain for clean, permanent URLs
+        if custom_domain:
+            public_url = f"https://{custom_domain}/{r2_key}"
+            # This URL does not expire, so we set expiration to None
+            expires_at = None
+            expires_in_hours = None
+        
+        # 2. Fallback to a secure, temporary presigned URL if no custom domain is set
+        else:
+            expires_in_seconds = 24 * 60 * 60  # 24 hours
+            expires_at_dt = datetime.now(timezone.utc) + timedelta(seconds=expires_in_seconds)
+            expires_at = expires_at_dt.isoformat() + "Z"
+            expires_in_hours = 24
+            
+            try:
+                public_url = client.generate_presigned_url(
+                    'get_object',
+                    Params={'Bucket': bucket_name, 'Key': r2_key},
+                    ExpiresIn=expires_in_seconds
+                )
+            except ClientError as e:
+                # Handle cases where presigning fails (e.g., permissions)
+                return {"success": False, "error": f"Failed to generate presigned URL: {e}"}
 
         return {
             "success": True,
             "r2_key": r2_key,
             "r2_url": f"s3://{bucket_name}/{r2_key}",
             "public_url": public_url,
-            "expires_at": expires_at.isoformat() + "Z",
-            "expires_in_hours": 24
+            "expires_at": expires_at,
+            "expires_in_hours": expires_in_hours
         }
 
     except ClientError as e:
