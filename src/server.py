@@ -134,6 +134,96 @@ def _check_existing_images() -> Dict[str, Any]:
     }
 
 
+# -------------------- Late.dev API helpers --------------------
+
+def _late_api_request(
+    method: str,
+    endpoint: str,
+    api_key: str,
+    json_data: Optional[Dict] = None,
+    max_retries: int = 2,
+    timeout: int = 30
+) -> Dict[str, Any]:
+    """Make a request to Late.dev API with retry logic and better error handling."""
+    import time
+
+    url = f"https://getlate.dev/api/v1{endpoint}"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+
+    last_error = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            response = requests.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=json_data,
+                timeout=timeout
+            )
+
+            # Handle 500 errors with retries
+            if response.status_code >= 500:
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    time.sleep(wait_time)
+                    continue
+
+                # Last attempt failed, try to extract error info
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get("error") or error_data.get("message") or str(error_data)
+                except json.JSONDecodeError:
+                    error_msg = response.text[:200]
+
+                raise RuntimeError(f"Late.dev server error (attempt {attempt + 1}): {error_msg}")
+
+            # Handle other HTTP errors
+            if not response.ok:
+                error_msg = f"Late.dev API error: HTTP {response.status_code}"
+                try:
+                    error_data = response.json()
+                    if "error" in error_data:
+                        error_msg += f" - {error_data['error']}"
+                    elif "message" in error_data:
+                        error_msg += f" - {error_data['message']}"
+                    elif isinstance(error_data, dict):
+                        error_msg += f" - {str(error_data)}"
+                except json.JSONDecodeError:
+                    error_msg += f" - {response.text[:200]}"
+
+                # Add specific guidance
+                if response.status_code == 401:
+                    error_msg += " (Invalid Late.dev API key)"
+                elif response.status_code == 403:
+                    error_msg += " (Access forbidden - check permissions)"
+
+                raise RuntimeError(error_msg)
+
+            # Try to parse JSON response
+            try:
+                return response.json()
+            except json.JSONDecodeError as e:
+                raise RuntimeError(f"Invalid JSON response from Late.dev API: {e}")
+
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < max_retries:
+                wait_time = 2 ** attempt
+                time.sleep(wait_time)
+                continue
+            raise RuntimeError(f"Network error connecting to Late.dev API: {e}")
+
+    # If we get here, all retries failed
+    if last_error:
+        raise RuntimeError(f"Failed to connect to Late.dev API after {max_retries + 1} attempts: {last_error}")
+    else:
+        raise RuntimeError(f"Failed to connect to Late.dev API after {max_retries + 1} attempts")
+
+
 # -------------------- Cloudflare R2 helpers --------------------
 
 def _get_r2_client():
@@ -483,38 +573,23 @@ def instagram_get_accounts() -> Dict[str, Any]:
         if not api_key:
             raise RuntimeError("LATE_DEV_API_KEY not configured")
 
-        # Make API request to Late.dev
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
+        # Make API request with retry logic
+        accounts_data = _late_api_request("GET", "/accounts", api_key)
 
-        response = requests.get(
-            "https://getlate.dev/api/v1/accounts",
-            headers=headers,
-            timeout=30
-        )
-
-        if not response.ok:
-            error_msg = f"Late.dev API error: HTTP {response.status_code}"
-            try:
-                error_data = response.json()
-                if "error" in error_data:
-                    error_msg += f" - {error_data['error']}"
-            except:
-                error_msg += f" - {response.text}"
-
-            if response.status_code == 401:
-                error_msg += " (Invalid Late.dev API key)"
-            elif response.status_code == 403:
-                error_msg += " (Access forbidden)"
-
-            raise RuntimeError(error_msg)
-
-        accounts_data = response.json()
-
+        # Check if response is in expected format
         if not isinstance(accounts_data, list):
-            raise RuntimeError("Invalid response format from Late.dev API")
+            # Sometimes API returns error object instead of list
+            if isinstance(accounts_data, dict):
+                if accounts_data.get("error"):
+                    raise RuntimeError(f"Late.dev API error: {accounts_data['error']}")
+                elif accounts_data.get("message"):
+                    raise RuntimeError(f"Late.dev API message: {accounts_data['message']}")
+                else:
+                    # If it's a single account object, wrap it in a list
+                    accounts_data = [accounts_data]
+            else:
+                # If it's not a list or dict, something is wrong
+                raise RuntimeError(f"Unexpected response format: {type(accounts_data)}")
 
         # Filter for Instagram accounts and add helpful information
         instagram_accounts = []
@@ -1225,12 +1300,6 @@ def instagram_post_schedule(
         if len(media_items) == 0:
             raise ValueError("No valid images found")
 
-        # Build Late.dev API request
-        headers = {
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-
         # Build platform-specific data
         platform_data = {
             "platform": "instagram",
@@ -1268,32 +1337,8 @@ def instagram_post_schedule(
             # For immediate posting, don't include scheduledFor
             pass
 
-        # Make API request to Late.dev
-        response = requests.post(
-            "https://getlate.dev/api/v1/posts",
-            headers=headers,
-            json=payload,
-            timeout=30
-        )
-
-        if not response.ok:
-            error_msg = f"Late.dev API error: HTTP {response.status_code}"
-            try:
-                error_data = response.json()
-                if "error" in error_data:
-                    error_msg += f" - {error_data['error']}"
-            except:
-                error_msg += f" - {response.text}"
-
-            # Handle specific Instagram errors
-            if response.status_code == 403:
-                error_msg += " (Check if Instagram account is Business type and properly connected)"
-            elif response.status_code == 401:
-                error_msg += " (Invalid Late.dev API key)"
-
-            raise RuntimeError(error_msg)
-
-        result_data = response.json()
+        # Make API request to Late.dev with retry logic
+        result_data = _late_api_request("POST", "/posts", api_key, payload)
 
         # Extract post information
         post_info = {
