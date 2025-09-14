@@ -769,6 +769,7 @@ def instagram_get_accounts() -> Dict[str, Any]:
 @mcp.tool(
     description=(
         "Scrape Instagram via Apify instagram-scraper. "
+        "direct_urls: List of Instagram URLs to scrape, for example [\"https://www.instagram.com/kugie.app/\"]. "
         "Accepts usernames (automatically converted to URLs), profile URLs, or post URLs. "
         "Plain usernames like 'kugie.app' are automatically converted to 'https://www.instagram.com/kugie.app/'. "
         "Can scrape profiles, posts, or specific content based on the URLs provided. "
