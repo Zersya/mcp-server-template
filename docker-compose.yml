@@ -1,0 +1,32 @@
+version: "3.8"
+
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mcp-server-template:latest
+    container_name: mcp-server
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - PORT=8000
+      # Optional: set these in Coolify (Environment) or via a .env file
+      - APIFY_TOKEN=${APIFY_TOKEN}
+      - REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}
+      - UNSPLASH_ACCESS_KEY=${UNSPLASH_ACCESS_KEY}
+      - POKE_API_KEY=${POKE_API_KEY}
+      - NOTIFY_API_KEY=${NOTIFY_API_KEY}
+      - NOTIFY_URL=${NOTIFY_URL}
+      - CLOUDFLARE_R2_ACCOUNT_ID=${CLOUDFLARE_R2_ACCOUNT_ID}
+      - CLOUDFLARE_R2_ACCESS_KEY_ID=${CLOUDFLARE_R2_ACCESS_KEY_ID}
+      - CLOUDFLARE_R2_SECRET_ACCESS_KEY=${CLOUDFLARE_R2_SECRET_ACCESS_KEY}
+      - CLOUDFLARE_R2_BUCKET_NAME=${CLOUDFLARE_R2_BUCKET_NAME}
+      - CLOUDFLARE_R2_PUBLIC_DOMAIN=${CLOUDFLARE_R2_PUBLIC_DOMAIN}
+      - MCP_SCRAPE_ITEMS_MAX=${MCP_SCRAPE_ITEMS_MAX:-50}
+      - LATE_DEV_API_KEY=${LATE_DEV_API_KEY}
+    volumes:
+      - ./data:/app/data
+      - ./images:/app/images
+    restart: unless-stopped
+
