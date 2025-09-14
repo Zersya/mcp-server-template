@@ -134,6 +134,145 @@ def _check_existing_images() -> Dict[str, Any]:
     }
 
 
+# -------------------- Social Media Optimization Helpers --------------------
+
+def _get_social_media_aspect_ratio(platform: str, content_type: str) -> str:
+    """Get the optimal aspect ratio for social media content."""
+    aspect_ratios = {
+        "instagram": {
+            "post": "1:1",
+            "story": "9:16",
+            "cover": "1:1",
+            "ad": "1:1",
+            "carousel": "1:1"
+        },
+        "facebook": {
+            "post": "1:1",
+            "cover": "16:9",
+            "ad": "1:1",
+            "carousel": "1:1"
+        },
+        "twitter": {
+            "post": "16:9",
+            "cover": "3:2",
+            "ad": "1:1"
+        },
+        "linkedin": {
+            "post": "1:1",
+            "cover": "16:9",
+            "ad": "1:1"
+        },
+        "tiktok": {
+            "post": "9:16",
+            "ad": "9:16"
+        }
+    }
+    return aspect_ratios.get(platform, {}).get(content_type, "1:1")
+
+
+def _enhance_social_media_prompt(
+    base_prompt: str,
+    platform: str,
+    content_type: str,
+    engagement_focus: str,
+    text_overlay: Optional[str],
+    brand_colors: Optional[str],
+    include_logo_hint: bool
+) -> str:
+    """Enhance prompt for social media optimization."""
+    enhanced = base_prompt
+
+    # Add platform-specific enhancements
+    if platform == "instagram":
+        enhanced += ", instagram aesthetic, viral worthy, high engagement"
+        if content_type == "story":
+            enhanced += ", vertical story format, full screen"
+    elif platform == "facebook":
+        enhanced += ", facebook optimized, shareable content"
+    elif platform == "twitter":
+        enhanced += ", twitter optimized, tweet worthy, attention grabbing"
+    elif platform == "linkedin":
+        enhanced += ", linkedin professional, business oriented, corporate"
+    elif platform == "tiktok":
+        enhanced += ", tiktok trending, gen z style, viral content"
+
+    # Add engagement focus
+    if engagement_focus == "viral":
+        enhanced += ", extremely viral, trending, high engagement rate"
+    elif engagement_focus == "high":
+        enhanced += ", highly engaging, share worthy, viral potential"
+    elif engagement_focus == "medium":
+        enhanced += ", engaging, professional, social media ready"
+    elif engagement_focus == "low":
+        enhanced += ", simple, clean, minimal"
+
+    # Add branding elements
+    if brand_colors:
+        enhanced += f", color scheme: {brand_colors}"
+
+    if include_logo_hint:
+        enhanced += ", space for logo, branding friendly"
+
+    if text_overlay:
+        enhanced += f", text overlay: '{text_overlay}'"
+
+    # Add quality enhancements
+    enhanced += ", high quality, professional photography, 4k resolution, perfect lighting"
+
+    return enhanced
+
+
+def _get_social_media_templates() -> Dict[str, Dict]:
+    """Get pre-defined social media templates."""
+    return {
+        "instagram_quote": {
+            "platform": "instagram",
+            "content_type": "post",
+            "aspect_ratio": "1:1",
+            "style_type": "CINEMATIC",
+            "engagement_focus": "high",
+            "base_prompt": "Inspirational quote with beautiful background",
+            "enhancement": "elegant typography, minimalist design, motivational"
+        },
+        "product_showcase": {
+            "platform": "instagram",
+            "content_type": "post",
+            "aspect_ratio": "1:1",
+            "style_type": "REALISTIC",
+            "engagement_focus": "medium",
+            "base_prompt": "Product photography",
+            "enhancement": "clean background, professional lighting, high detail"
+        },
+        "lifestyle_story": {
+            "platform": "instagram",
+            "content_type": "story",
+            "aspect_ratio": "9:16",
+            "style_type": "CINEMATIC",
+            "engagement_focus": "high",
+            "base_prompt": "Lifestyle scene",
+            "enhancement": "candid moment, natural lighting, authentic"
+        },
+        "linkedin_header": {
+            "platform": "linkedin",
+            "content_type": "cover",
+            "aspect_ratio": "16:9",
+            "style_type": "PROFESSIONAL",
+            "engagement_focus": "low",
+            "base_prompt": "Professional business header",
+            "enhancement": "corporate, clean, trustworthy, expert"
+        },
+        "twitter_banner": {
+            "platform": "twitter",
+            "content_type": "cover",
+            "aspect_ratio": "3:2",
+            "style_type": "CINEMATIC",
+            "engagement_focus": "medium",
+            "base_prompt": "Brand banner",
+            "enhancement": "bold, attention grabbing, clear messaging"
+        }
+    }
+
+
 # -------------------- Late.dev API helpers --------------------
 
 def _late_api_request(
@@ -141,7 +280,7 @@ def _late_api_request(
     endpoint: str,
     api_key: str,
     json_data: Optional[Dict] = None,
-    max_retries: int = 2,
+    max_retries: int = 0,
     timeout: int = 30
 ) -> Dict[str, Any]:
     """Make a request to Late.dev API with retry logic and better error handling."""
@@ -995,21 +1134,28 @@ def image_fetch_unsplash(
 
 @mcp.tool(
     description=(
-        "Generate Instagram post images using Ideogram AI (ideogram-ai/ideogram-v3-turbo). "
-        "Creates high-quality images optimized for social media with text overlays and branding. "
-        "Supports various aspect ratios and styles perfect for Instagram posts and carousels. "
+        "Generate social media post images using Ideogram AI (ideogram-ai/ideogram-v3-turbo). "
+        "Creates high-quality images optimized for Instagram, Facebook, Twitter, and LinkedIn. "
+        "Specialized for social media with text overlays, branding, and engagement-optimized content. "
+        "Supports platform-specific aspect ratios, branding elements, and viral content styles. "
         "Returns generated image URL and saves locally. Sends notification after completion."
     )
 )
 def image_generate_ideogram(
     prompt: str,
+    platform: str = "instagram",
+    content_type: str = "post",
     style_type: str = "AUTO",
-    aspect_ratio: str = "1:1",
+    aspect_ratio: Optional[str] = None,
     magic_prompt_option: str = "AUTO",
     negative_prompt: Optional[str] = None,
+    brand_colors: Optional[str] = None,
+    text_overlay: Optional[str] = None,
+    include_logo_hint: bool = False,
+    engagement_focus: str = "medium",
     save_locally: bool = True,
 ) -> Dict[str, Any]:
-    """Generate Instagram post images using Ideogram AI."""
+    """Generate social media post images using Ideogram AI."""
     try:
         if not replicate:
             raise RuntimeError("replicate library is not installed")
@@ -1021,10 +1167,26 @@ def image_generate_ideogram(
         # Check existing images first
         existing = _check_existing_images()
 
-        # Validate input parameters
+        # Validate platform-specific parameters
+        valid_platforms = ["instagram", "facebook", "twitter", "linkedin", "tiktok"]
+        if platform not in valid_platforms:
+            raise ValueError(f"platform must be one of: {', '.join(valid_platforms)}")
+
+        valid_content_types = ["post", "story", "cover", "ad", "carousel"]
+        if content_type not in valid_content_types:
+            raise ValueError(f"content_type must be one of: {', '.join(valid_content_types)}")
+
         valid_styles = ["AUTO", "REALISTIC", "ANIME", "RENDER_3D", "CINEMATIC"]
         if style_type not in valid_styles:
             raise ValueError(f"style_type must be one of: {', '.join(valid_styles)}")
+
+        valid_engagement = ["low", "medium", "high", "viral"]
+        if engagement_focus not in valid_engagement:
+            raise ValueError(f"engagement_focus must be one of: {', '.join(valid_engagement)}")
+
+        # Auto-determine aspect ratio based on platform and content type
+        if aspect_ratio is None:
+            aspect_ratio = _get_social_media_aspect_ratio(platform, content_type)
 
         valid_ratios = ["1:1", "16:9", "9:16", "4:3", "3:4"]
         if aspect_ratio not in valid_ratios:
@@ -1034,9 +1196,15 @@ def image_generate_ideogram(
         if magic_prompt_option not in valid_magic_prompts:
             raise ValueError(f"magic_prompt_option must be one of: {', '.join(valid_magic_prompts)}")
 
+        # Enhance prompt for social media
+        enhanced_prompt = _enhance_social_media_prompt(
+            prompt, platform, content_type, engagement_focus,
+            text_overlay, brand_colors, include_logo_hint
+        )
+
         # Prepare model input
         model_input = {
-            "prompt": prompt,
+            "prompt": enhanced_prompt,
             "style_type": style_type,
             "aspect_ratio": aspect_ratio,
             "magic_prompt_option": magic_prompt_option
@@ -1054,12 +1222,20 @@ def image_generate_ideogram(
         # Process output
         result_info = {
             "model": "ideogram-ai/ideogram-v3-turbo",
-            "prompt": prompt,
+            "original_prompt": prompt,
+            "enhanced_prompt": enhanced_prompt,
+            "platform": platform,
+            "content_type": content_type,
             "style_type": style_type,
             "aspect_ratio": aspect_ratio,
+            "engagement_focus": engagement_focus,
             "magic_prompt_option": magic_prompt_option,
             "negative_prompt": negative_prompt,
-            "existing_images": existing
+            "brand_colors": brand_colors,
+            "text_overlay": text_overlay,
+            "include_logo_hint": include_logo_hint,
+            "existing_images": existing,
+            "social_media_optimized": True
         }
 
         if output:
@@ -1475,6 +1651,116 @@ def instagram_generate_and_edit(
     except Exception as e:
         notify_status(f"Instagram image generation & editing failed: {e}")
         return {"error": str(e), "workflow": "ideogram_nano_gemini"}
+
+
+@mcp.tool(
+    description=(
+        "Generate social media images using pre-built templates for quick, optimized content. "
+        "Includes templates for Instagram quotes, product showcases, stories, LinkedIn headers, and more. "
+        "Automatically applies platform-specific settings, aspect ratios, and engagement optimizations. "
+        "Perfect for rapid social media content creation with consistent branding and style."
+    )
+)
+def social_media_template_generator(
+    template_name: str,
+    custom_prompt: Optional[str] = None,
+    brand_colors: Optional[str] = None,
+    text_overlay: Optional[str] = None,
+    include_logo_hint: bool = False,
+    engagement_focus: str = "medium",
+    save_locally: bool = True,
+) -> Dict[str, Any]:
+    """Generate social media images using pre-built templates."""
+    try:
+        # Get available templates
+        templates = _get_social_media_templates()
+
+        if template_name not in templates:
+            available_templates = list(templates.keys())
+            raise ValueError(f"Template '{template_name}' not found. Available templates: {', '.join(available_templates)}")
+
+        template = templates[template_name]
+
+        # Use custom prompt or template default
+        prompt = custom_prompt or template["base_prompt"]
+
+        # Add template-specific enhancement
+        enhanced_prompt = f"{prompt}, {template['enhancement']}"
+
+        # Generate using the template settings
+        result = image_generate_ideogram(
+            prompt=enhanced_prompt,
+            platform=template["platform"],
+            content_type=template["content_type"],
+            style_type=template["style_type"],
+            aspect_ratio=template["aspect_ratio"],
+            engagement_focus=engagement_focus,
+            brand_colors=brand_colors,
+            text_overlay=text_overlay,
+            include_logo_hint=include_logo_hint,
+            save_locally=save_locally
+        )
+
+        # Add template metadata
+        if isinstance(result, dict):
+            result["template_used"] = template_name
+            result["template_config"] = template
+
+        return result
+
+    except Exception as e:
+        notify_status(f"Template generation failed: {e}")
+        return {"error": str(e), "template_name": template_name}
+
+
+@mcp.tool(
+    description=(
+        "List all available social media templates for quick content generation. "
+        "Returns template names, descriptions, platforms, content types, and optimal use cases. "
+        "Use this to choose the perfect template for your social media needs."
+    )
+)
+def social_media_list_templates() -> Dict[str, Any]:
+    """List all available social media templates."""
+    try:
+        templates = _get_social_media_templates()
+
+        template_list = []
+        for name, config in templates.items():
+            template_info = {
+                "name": name,
+                "platform": config["platform"],
+                "content_type": config["content_type"],
+                "aspect_ratio": config["aspect_ratio"],
+                "style_type": config["style_type"],
+                "engagement_focus": config["engagement_focus"],
+                "base_prompt": config["base_prompt"],
+                "enhancement": config["enhancement"],
+                "use_case": _get_template_use_case(name)
+            }
+            template_list.append(template_info)
+
+        return {
+            "success": True,
+            "templates": template_list,
+            "count": len(template_list),
+            "usage_hint": "Use social_media_template_generator() with any template name"
+        }
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def _get_template_use_case(template_name: str) -> str:
+    """Get human-readable use case for template."""
+    use_cases = {
+        "instagram_quote": "Perfect for inspirational quotes, motivational content, and text-focused posts",
+        "product_showcase": "Ideal for e-commerce, product launches, and feature highlights",
+        "lifestyle_story": "Great for behind-the-scenes, authentic moments, and personal branding",
+        "linkedin_header": "Professional headers for LinkedIn profiles and company pages",
+        "twitter_banner": "Eye-catching banners for Twitter profiles and brand promotion"
+    }
+    return use_cases.get(template_name, "General social media content")
 
 
 @mcp.tool(
