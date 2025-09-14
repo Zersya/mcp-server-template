@@ -212,7 +212,8 @@ def _upload_to_r2(local_path: str, folder: str, filename: str) -> Dict[str, Any]
 @mcp.tool(
     description=(
         "Scrape Instagram via Apify instagram-scraper. "
-        "Accepts usernames, profile URLs, or post URLs in the username array. "
+        "Accepts usernames (automatically converted to URLs), profile URLs, or post URLs. "
+        "Plain usernames like 'kugie.app' are automatically converted to 'https://www.instagram.com/kugie.app/'. "
         "Can scrape profiles, posts, or specific content based on the URLs provided. "
         "Sends a completion notification after scraping."
         "Returns all scraped items in the response for further processing by other tools/agents."
@@ -233,9 +234,29 @@ def instagram_scrape(
         if ApifyClient is None:
             raise RuntimeError("apify-client is not installed")
 
+        # Convert plain usernames to Instagram URLs
+        processed_usernames = []
+        conversions = []
+
+        for user in username:
+            if user.startswith(("http://", "https://")):
+                # Already a URL, keep as is
+                processed_usernames.append(user)
+            else:
+                # Plain username, convert to Instagram URL
+                # Remove @ symbol if present
+                clean_username = user.lstrip('@')
+                instagram_url = f"https://www.instagram.com/{clean_username}/"
+                processed_usernames.append(instagram_url)
+                conversions.append(f"{user} -> {instagram_url}")
+
+        # Log conversions for debugging
+        if conversions:
+            print(f"Username conversions: {conversions}")
+
         client = ApifyClient(token)
         run_input: Dict[str, Any] = {
-            "username": username,
+            "username": processed_usernames,
             "resultsLimit": results_limit
         }
 
@@ -285,6 +306,11 @@ def instagram_scrape(
             "items_count": len(items),
             "items": items,
             "notification": notify,
+            "input_processing": {
+                "original_usernames": username,
+                "processed_usernames": processed_usernames,
+                "conversions": conversions if conversions else "No conversions needed"
+            },
             "run_info": {
                 "id": run.get("id"),
                 "status": status,

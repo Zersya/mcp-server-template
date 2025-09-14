@@ -49,7 +49,7 @@ Your server will be available at `https://your-service-name.onrender.com/mcp` (N
 This server includes MCP tools for Instagram scraping, image fetching, and AI-powered image editing.
 
 ### Instagram Scraping (Apify)
-Uses Apify's `instagram-scraper` to collect Instagram content from usernames, profile URLs, or specific post URLs.
+Uses Apify's `instagram-scraper` to collect Instagram content from usernames, profile URLs, or specific post URLs. Plain usernames are automatically converted to Instagram profile URLs.
 
 ### Image Fetching (Unsplash)
 Search and download free-to-use images from Unsplash's extensive collection.
@@ -75,6 +75,28 @@ Schedule and publish Instagram posts using the Late.dev API with images from Uns
 1. **Research Content**: Use `instagram_scrape()` to analyze competitor posts
 2. **Create Content**: Use `image_fetch_unsplash()` and `image_edit_replicate()` for visuals
 3. **Schedule Posts**: Use `instagram_post_schedule()` to publish at optimal times
+
+## Usage Examples
+
+### Instagram Scraping with Username Conversion
+```python
+# Plain usernames (automatically converted to URLs)
+instagram_scrape(
+    username=["kugie.app", "natgeo", "@nasa"],  # @ symbol is automatically removed
+    results_limit=30
+)
+# Converts to: ["https://www.instagram.com/kugie.app/", "https://www.instagram.com/natgeo/", "https://www.instagram.com/nasa/"]
+
+# Mixed input types
+instagram_scrape(
+    username=[
+        "kugie.app",  # Plain username -> converted to URL
+        "https://www.instagram.com/natgeo/",  # Profile URL -> kept as is
+        "https://www.instagram.com/p/ABC123/"  # Post URL -> kept as is
+    ],
+    results_limit=50
+)
+```
 
 ## Environment Variables
 
