@@ -799,6 +799,20 @@ def instagram_scrape(
         if not (has_direct or has_search):
             raise ValueError("Provide either direct_urls (usernames or URLs) or both search_type and search_query")
 
+        # Normalize and validate limits
+        try:
+            results_limit = int(results_limit)
+        except Exception:
+            results_limit = 1
+        if results_limit < 1:
+            results_limit = 1
+        try:
+            search_limit = int(search_limit)
+        except Exception:
+            search_limit = 1
+        if search_limit < 1:
+            search_limit = 1
+
         # Check knowledge base first for direct URLs (unless force_scrape is True)
         kb_check_result = None
         if has_direct and not force_scrape:
@@ -999,7 +1013,27 @@ def instagram_dataset_fetch(
             "paging_method": "list_items" if used_list_api else "iterate_items",
         }
     except Exception as e:
-        return {"error": str(e)}
+        msg = str(e)
+        lower = msg.lower()
+        if "dataset was not found" in lower or "not found" in lower:
+            return {
+                "error": "Dataset was not found",
+                "next_action": "REQUEST_SCRAPE_INPUT",
+                "message": "No dataset exists yet for this request. To create one, run instagram_scrape by providing Instagram usernames (or profile URLs) OR a search type with keywords.",
+                "scrape_input_examples": {
+                    "by_usernames": {
+                        "direct_urls": ["instagram.com/kugie.app", "kugie.app"],
+                        "results_limit": 200
+                    },
+                    "by_keywords": {
+                        "search_type": "hashtag",
+                        "search_query": "coffee fashion",
+                        "search_limit": 1
+                    }
+                },
+                "hint": "Call instagram_scrape(direct_urls=[...]) or instagram_scrape(search_type='hashtag', search_query='your keywords')"
+            }
+        return {"error": msg}
 
 
 @mcp.tool(
@@ -1785,6 +1819,8 @@ def instagram_post_schedule(
     publish_now: bool = False,
     content_type: str = "post",
     collaborators: Optional[List[str]] = None,
+    imagesource: Optional[str] = None,
+    imagesources: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     """Schedule Instagram posts via Late.dev API with image support."""
     try:
@@ -1805,12 +1841,18 @@ def instagram_post_schedule(
         if content_type not in valid_content_types:
             raise ValueError(f"content_type must be one of: {', '.join(valid_content_types)}")
 
+        # Support alternate parameter names (imagesource/imagesources)
+        if imagesource is not None and not image_source:
+            image_source = imagesource
+        if imagesources is not None and not image_sources:
+            image_sources = imagesources
+
         # Validate image sources
         if not image_source and not image_sources:
-            raise ValueError("Either image_source (single) or image_sources (multiple) must be provided")
+            raise ValueError("Either image_source/imagesource (single) or image_sources/imagesources (multiple) must be provided")
 
         if image_source and image_sources:
-            raise ValueError("Use either image_source (single) or image_sources (multiple), not both")
+            raise ValueError("Use either image_source/imagesource (single) or image_sources/imagesources (multiple), not both")
 
         # Validate carousel requirements
         if content_type == "carousel" and (not image_sources or len(image_sources) < 2):
